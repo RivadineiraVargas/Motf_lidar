@@ -47,7 +47,7 @@ train_pipeline = [
 
 # [ALTERADO] Dataloader para ler pasta local e Batch pequeno
 train_dataloader = dict(
-    batch_size=10, # <--- Ideal: tamanho do batch igual ao do dataset para overfitting
+    batch_size=2, # <--- Ideal: tamanho do batch igual ao do dataset para overfitting
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False), # Shuffle False ajuda no debug visual
