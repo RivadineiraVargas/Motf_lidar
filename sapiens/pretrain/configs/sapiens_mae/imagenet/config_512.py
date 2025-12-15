@@ -7,8 +7,8 @@ _base_ = [
 ]
 
 # --- CONFIGURAÇÕES GERAIS ---
-patch_size = 16
-image_size = 1024
+patch_size = 8
+image_size = 512
 
 # Visualizar e Salvar com frequência para monitorar o teste
 vis_every_iters = 1000
@@ -47,14 +47,14 @@ train_pipeline = [
 
 # [ALTERADO] Dataloader para ler pasta local e Batch pequeno
 train_dataloader = dict(
-    batch_size=2, # <--- Ideal: tamanho do batch igual ao do dataset para overfitting
+    batch_size=10, # <--- Ideal: tamanho do batch igual ao do dataset para overfitting
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False), # Shuffle False ajuda no debug visual
     collate_fn=dict(type='default_collate'),
     dataset=dict(
         type='CustomDataset', # <--- Usa pasta genérica de imagens
-        data_root='/dados/hendrix/customData', # <--- Certifique-se que suas 10 imagens estão aqui
+        data_root='/home/hendrix/Desktop/indir/', # <--- Certifique-se que suas 10 imagens estão aqui
         pipeline=train_pipeline
     )
 )
@@ -99,8 +99,26 @@ optim_wrapper = dict(
     )
 )
 
+# # learning rate scheduler
+# param_scheduler = [
+#     dict(
+#         type='LinearLR',
+#         start_factor=1e-4,
+#         by_epoch=True,
+#         begin=0,
+#         end=40,
+#         convert_to_iter_based=True),
+#     dict(
+#         type='CosineAnnealingLR',
+#         T_max=1560,
+#         by_epoch=True,
+#         begin=40,
+#         end=1600,
+#         convert_to_iter_based=True)
+# ]
+
 # --- RUNTIME ---
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=4000) # <--- AUMENTADO para garantir a convergência
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=3000) # <--- AUMENTADO para garantir a convergência
 
 default_hooks = dict(
     checkpoint=dict(type='CheckpointHook', interval=save_every_epochs, max_keep_ckpts=2),
@@ -140,3 +158,15 @@ test_pipeline = [
         backend='pillow'),
     dict(type='PackInputs'),
 ]
+
+
+#test_dataloader = dict(
+#    batch_size=2,
+#    num_workers=4,
+#    dataset=dict(
+#        type='CustomDataset', # <--- Usa pasta genérica de imagens
+#        data_root='/home/hendrix/Desktop/indir/', # <--- Certifique-se que suas 10 imagens estão aqui
+#        pipeline=test_pipeline
+#    ),
+#    persistent_workers=True,
+#)

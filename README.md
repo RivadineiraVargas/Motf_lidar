@@ -336,3 +336,83 @@ Os seguintes comandos irão criar e configurar um ambiente Conda chamado `sapien
 
 Após seguir estes passos, o ambiente `sapiens_venv` estará pronto para ser utilizado.
 
+
+## 🧬 Primeiros passos com o Sapiens.
+
+Essa seção destina-se ao processo de instrução para como executar um overfit usando 10 imagens, siga os passos abaixo.
+
+
+### 📂 Configurando corretamente a entrada
+
+Os seguintes comandos são para criar corretamente o diretório contendo as 10 imagens, que será o input para a rede.
+
+1.  **Navegue até o diretório `pretrain/tools`:**
+
+    Lembre-se de alterar `/path/to/your/repo/` para o caminho real do seu repositório.
+
+    ```bash
+    cd /path/to/your/repo/lidar_sweep_viewer/sapiens/pretrain/tools
+    ```
+
+2.  **Crie o diretório de entrada de imagens:**
+
+    ```bash
+    mkdir -p /dados/hendrix/customData/train
+    ```
+
+
+3.  **Copie as imagens para o diretório de entrada:**
+
+    ```bash
+    cp -r /dados/hendrix/waymo10/images/58d5f1b9e6a1a2f7 /dados/hendrix/customData/train/
+    ```
+
+    
+4.  **Execute o script de treino com as configurações corretas para overfit:**
+
+    Esse comando foi configurado para o uso de apenas uma GPU, para o uso de 2 ou mais leia a explicação abaixo.
+
+    ```bash
+    CUDA_VISIBLE_DEVICES=0 python3 -m torch.distributed.launch --nnodes=1 --node_rank=0 --nproc_per_node=1 --master_port=29500 train.py ../configs/sapiens_mae/imagenet/config_1024_overfit.py --launcher pytorch
+    ```
+
+### 📖 Explicação dos Parâmetros de Linha de Comando
+
+O comando de execução do treino utiliza vários parâmetros para configurar o ambiente de treinamento distribuído com PyTorch. Abaixo está uma explicação detalhada de cada um deles:
+
+-   `CUDA_VISIBLE_DEVICES=0,1,2`:
+    -   **Função**: Variável de ambiente que define quais GPUs (Unidades de Processamento Gráfico) da NVIDIA estarão visíveis e disponíveis para o processo.
+    -   **Exemplo**: `0,1,2` significa que o script poderá utilizar as GPUs com IDs 0, 1 e 2. O número de GPUs aqui deve ser consistente com o valor de `--nproc_per_node`.
+
+-   `python3 -m torch.distributed.launch`:
+    -   **Função**: É o utilitário fornecido pelo PyTorch para lançar um script de treinamento em modo distribuído. Ele gerencia a criação de múltiplos processos, um para cada GPU, e configura a comunicação entre eles.
+    -   ` -m`: Flag do Python que executa um módulo como um script.
+
+-   `--nnodes=1`:
+    -   **Função**: Define o número total de **nós** (máquinas físicas ou virtuais) que participarão do treinamento distribuído.
+    -   **Exemplo**: `1` indica que o treinamento será executado em uma única máquina.
+
+-   `--node_rank=0`:
+    -   **Função**: Especifica o "rank" ou ID do nó atual, em um intervalo de `0` a `nnodes - 1`.
+    -   **Exemplo**: `0` significa que esta é a primeira (e única, neste caso) máquina.
+
+-   `--nproc_per_node=3`:
+    -   **Função**: Define o número de **processos** a serem criados em cada nó. Idealmente, este valor deve ser igual ao número de GPUs que você deseja usar na máquina.
+    -   **Exemplo**: `3` lança três processos de treinamento no nó, cada um geralmente associado a uma GPU.
+
+-   `--master_port=29500`:
+    -   **Função**: Especifica a porta de rede que o processo "mestre" (rank 0) usará para se comunicar e sincronizar com os outros processos.
+    -   **Exemplo**: `29500` é a porta escolhida. Deve ser uma porta livre na máquina.
+
+-   `train.py`:
+    -   **Função**: Este é o script Python principal que contém a lógica de treinamento do modelo. É este arquivo que será executado por cada um dos processos lançados.
+
+-   `../configs/sapiens_mae/imagenet/config_1024.py`:
+    -   **Função**: É um argumento posicional passado para o `train.py`. Representa o caminho para o arquivo de configuração do experimento.
+    -   **Conteúdo**: Este arquivo define todos os hiperparâmetros do modelo, como arquitetura da rede, otimizador, taxa de aprendizado, configurações do dataset, transformações de dados, etc.
+
+-   `--launcher pytorch`:
+    -   **Função**: Argumento opcional que informa ao script de treinamento qual "lançador" de processos foi usado. Isso ajuda a abstrair a inicialização do ambiente distribuído.
+    -   **Exemplo**: `pytorch` indica que o `torch.distributed.launch` foi utilizado.
+
+    

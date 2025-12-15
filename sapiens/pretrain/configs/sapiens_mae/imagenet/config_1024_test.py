@@ -99,6 +99,24 @@ optim_wrapper = dict(
     )
 )
 
+# # learning rate scheduler
+# param_scheduler = [
+#     dict(
+#         type='LinearLR',
+#         start_factor=1e-4,
+#         by_epoch=True,
+#         begin=0,
+#         end=40,
+#         convert_to_iter_based=True),
+#     dict(
+#         type='CosineAnnealingLR',
+#         T_max=1560,
+#         by_epoch=True,
+#         begin=40,
+#         end=1600,
+#         convert_to_iter_based=True)
+# ]
+
 # --- RUNTIME ---
 train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=4000) # <--- AUMENTADO para garantir a convergência
 
@@ -140,3 +158,15 @@ test_pipeline = [
         backend='pillow'),
     dict(type='PackInputs'),
 ]
+
+
+test_dataloader = dict(
+   batch_size=2,
+   num_workers=4,
+   dataset=dict(
+       type='CustomDataset', # <--- Usa pasta genérica de imagens
+       data_root='/dados/hendrix/customData', # <--- Certifique-se que suas 10 imagens estão aqui
+       pipeline=test_pipeline
+   ),
+   persistent_workers=True,
+)
