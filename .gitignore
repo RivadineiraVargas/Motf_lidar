@@ -34,3 +34,5 @@ sapiens/pretrain/evaluation_plots/
 *.swo
 *~
 .DS_Store
+sapiens/pretrain/Motf_lidar/
+sapiens/pretrain/trajectory.txt
