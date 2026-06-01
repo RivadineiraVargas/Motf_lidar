@@ -104,7 +104,7 @@ class MAEPretrainDecoder(BaseModule):
             int(self.num_patches**.5),
             self.decoder_pos_embed.shape[-1],
             cls_token=True)
-        self.decoder_pos_embed.data.copy_(decoder_pos_embed.float())
+#        self.decoder_pos_embed.data.copy_(decoder_pos_embed.float())
 
         torch.nn.init.normal_(self.mask_token, std=.02)
 

@@ -14,7 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mmengine.model import BaseModule
 
-from mmpretrain.models import VisionTransformer
+from mmpretrain.models.backbones.vision_transformer import VisionTransformer
 from mmpretrain.registry import MODELS
 from mmpretrain.structures import DataSample
 from .base import BaseSelfSupervisor

@@ -19,6 +19,7 @@ from .flowers102 import Flowers102
 from .food101 import Food101
 from .imagenet import ImageNet, ImageNet21k
 from .inshop import InShop
+from .lidar_sequence import LidarSequenceDataset
 from .mnist import FashionMNIST, MNIST
 from .multi_label import MultiLabelDataset
 from .multi_task import MultiTaskDataset
@@ -30,7 +31,7 @@ from .stanfordcars import StanfordCars
 from .sun397 import SUN397
 from .transforms import *  # noqa: F401,F403
 from .voc import VOC
-
+from .trajectory_dataset import TrajectoryDataset
 __all__ = [
     "BaseDataset",
     "CIFAR10",
@@ -47,6 +48,7 @@ __all__ = [
     "ImageNet21k",
     "InShop",
     "KFoldDataset",
+    "LidarSequenceDataset",
     "MNIST",
     "MultiLabelDataset",
     "MultiTaskDataset",
@@ -56,13 +58,14 @@ __all__ = [
     "SUN397",
     "StanfordCars",
     "VOC",
+    "TrajectoryDataset",
     "build_dataset",
 ]
 
 from .dataset_wrappers import CombinedDataset
 # from .humans_300m import Humans300M
 
-__all__ += ["Humans300M", "CombinedDataset"]
+__all__ += ["CombinedDataset"]
 
 if WITH_MULTIMODAL:
     from .coco_caption import COCOCaption

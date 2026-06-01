@@ -6,6 +6,8 @@
 #include <array>
 #include <opencv2/opencv.hpp>
 #include <sys/stat.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
 
 
 // Definição das dimensões e constantes
@@ -37,6 +39,18 @@ typedef struct {
     double cartesian_z;
     double range;
 } lidar_point;
+
+
+bool read_bin_file(
+    const char* path,
+    size_t &num_points,
+    cv::Mat &out_image,
+    float meters,
+    int size_in_pixels,
+    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_ptr
+);
+
+
 
 // Declarações das funções utilitárias
 

@@ -8,7 +8,8 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
 from torch import nn
-from mmpretrain.models import HiViT, VisionTransformer2
+from mmpretrain.models.backbones.hivit import HiViT
+from mmpretrain.models.backbones.vision_transformer2 import VisionTransformer2
 from mmpretrain.registry import MODELS
 from mmpretrain.structures import DataSample
 from mmengine.optim import OptimWrapper

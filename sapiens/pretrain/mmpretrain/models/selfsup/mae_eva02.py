@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
 
-from mmpretrain.models import ViTEVA02
+from mmpretrain.models.backbones.vit_eva02 import ViTEVA02
 from mmpretrain.registry import MODELS
 from mmpretrain.structures import DataSample
 from mmengine.optim import OptimWrapper

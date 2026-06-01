@@ -1,3 +1,36 @@
+# Compilación C++
 *.o
+*.a
 Makefile.depend
-.png
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Datasets LiDAR (demasiado grandes para git — descargar aparte)
+waymo_10/
+waymo_100/
+waymo_1000/
+
+# Salidas de entrenamiento y checkpoints
+sapiens/pretrain/work_dirs/
+*.pth
+*.pt
+*.pkl
+
+# Carpetas de resultados generados en runtime
+sapiens/pretrain/eval_baseline/
+sapiens/pretrain/eval_step2/
+sapiens/pretrain/evaluation_plots/
+
+# Archivos multimedia generados
+*.mp4
+*.gif
+
+# Archivos temporales de editores
+*.swp
+*.swo
+*~
+.DS_Store

@@ -8,7 +8,8 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
 from torch import nn
-from mmpretrain.models import HiViT, VisionTransformer
+from mmpretrain.models.backbones.hivit import HiViT
+from mmpretrain.models.backbones.vision_transformer import VisionTransformer
 from mmpretrain.registry import MODELS
 from mmpretrain.structures import DataSample
 from mmengine.optim import OptimWrapper
@@ -110,7 +111,7 @@ class MAEViT(VisionTransformer):
         mask = torch.gather(mask, dim=1, index=ids_restore)
 
         return x_masked, mask, ids_restore
-    
+
     def fixed_masking(
         self,
         x: torch.Tensor,
@@ -201,7 +202,6 @@ class MAEViT(VisionTransformer):
             x = self.norm1(x)
 
             return (x, mask, ids_restore)
-    
     def inference(
         self,
         x: torch.Tensor,
@@ -261,30 +261,12 @@ class MAE(BaseSelfSupervisor):
 
     def train_step(self, data: Union[dict, tuple, list],
                    optim_wrapper: OptimWrapper) -> Dict[str, torch.Tensor]:
-        """Perform a training step.
-
-        This method is called by the `MMDistributedDataParallel` wrapper. It
-        runs the forward pass to get the losses and visualization data, adds
-        the visualization data to the loss dictionary, and returns the combined
-        dictionary to the wrapper.
-        """
         with optim_wrapper.optim_context(self):
-            # `_run_forward` calls `self.forward`, which in turn calls
-            # `self.loss`. `self.loss` returns a tuple of
-            # (losses_dict, preds, masks).
+            data = self.data_preprocessor(data, True)
             losses_dict, preds, masks = self._run_forward(data, mode='loss')
-
-        # The visualization hook (`PretrainVisualizationHook`) expects
-        # 'vis_preds' and 'vis_masks' to be in the dictionary returned by this
-        # step. We add them here. `parse_losses` will be called on this
-        # dictionary later, which will log their mean values, but the
-        # original tensors will be available to the hook.
-        losses_dict['vis_preds'] = preds
-        losses_dict['vis_masks'] = masks
-
-        # Return the combined dictionary to the `MMDistributedDataParallel`
-        # wrapper, which will handle loss parsing and optimization.
-        return losses_dict
+        parsed_losses, log_vars = self.parse_losses(losses_dict)
+        optim_wrapper.update_params(parsed_losses)
+        return log_vars
 
     def forward(self,
                 inputs: Union[torch.Tensor, List[torch.Tensor]],
@@ -345,7 +327,7 @@ class MAE(BaseSelfSupervisor):
         losses = dict(loss=loss)
         self._vis_data = (pred, mask)  # Stash for visualization hook
         return losses
-    
+
     def inference(self, inputs: torch.Tensor, data_samples: List[DataSample],
              **kwargs) -> Dict[str, torch.Tensor]:
         # ids_restore: the same as that in original repo, which is used
@@ -355,7 +337,7 @@ class MAE(BaseSelfSupervisor):
         loss = self.head.loss(pred, inputs, mask)
         losses = dict(loss=loss)
         return losses, pred, mask
-    
+
     def unnormalize_image(self, inputs, use_cpu=False):
         if use_cpu == True:
             return inputs*self.data_preprocessor.std.cpu() + self.data_preprocessor.mean.cpu()

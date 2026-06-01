@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <fstream>
+#include <pcl/point_types.h>
+#include <pcl/point_cloud.h>
 
 using namespace std;
 
@@ -359,8 +362,70 @@ void calculate_birdview_image(cv::Mat &birdview_image_color, size_t num_points, 
 }
 
 
+
+bool read_bin_file(
+    const char* path,
+    size_t &num_points,
+    cv::Mat &out_image,
+    float meters,
+    int size_in_pixels,
+    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_ptr
+) {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs.is_open()) {
+        std::cerr << "Falha ao abrir arquivo .bin: " << path << "\n";
+        return false;
+    }
+
+    // Cada registro é (x, y, z, intensidade)
+    ifs.seekg(0, std::ios::end);
+    size_t num_bytes = ifs.tellg();
+    ifs.seekg(0, std::ios::beg);
+
+    num_points = num_bytes / (4 * sizeof(float));
+    cloud_ptr->clear();
+    cloud_ptr->points.reserve(num_points);
+
+    out_image = cv::Mat::zeros(size_in_pixels, size_in_pixels, CV_8UC1);
+
+    const float scale = size_in_pixels / (meters * 2.0f);
+
+    for (size_t i = 0; i < num_points; i++) {
+        float data[4];
+        ifs.read(reinterpret_cast<char*>(&data), sizeof(float) * 4);
+        float x = data[0];
+        float y = data[1];
+        float z = data[2];
+        float intensity = data[3];
+
+        // Preenche PointCloud
+        pcl::PointXYZI p;
+        p.x = x;
+        p.y = y;
+        p.z = z;
+        p.intensity = intensity;
+        cloud_ptr->points.push_back(p);
+
+        // Preenche Birdview
+        int px = int((x + meters) * scale);
+        int py = int((y + meters) * scale);
+
+        if (px >= 0 && px < size_in_pixels && py >= 0 && py < size_in_pixels) {
+            out_image.at<uchar>(size_in_pixels - 1 - py, px) =
+                std::min(255, int(intensity * 255));
+        }
+    }
+
+    cloud_ptr->width = cloud_ptr->points.size();
+    cloud_ptr->height = 1;
+    cloud_ptr->is_dense = false;
+
+    return true;
+}
+
+
 // Funções de leitura de arquivo
-void read_bin_file(const char *filename, size_t &num_points, cv::Mat &birdview_image, float meters, int size_in_pixels) {
+/*void read_bin_file(const char *filename, size_t &num_points, cv::Mat &birdview_image, float meters, int size_in_pixels) {
     FILE *file = fopen(filename, "rb");
     if (file == NULL) {
         perror("Erro ao abrir o arquivo");
@@ -396,7 +461,7 @@ void read_bin_file(const char *filename, size_t &num_points, cv::Mat &birdview_i
     free(points);
     fclose(file);
 }
-
+*/
 bool read_pose_file(const char *filename, float pose[4][4]) {
     FILE *file = fopen(filename, "r");
     if (file == NULL) {

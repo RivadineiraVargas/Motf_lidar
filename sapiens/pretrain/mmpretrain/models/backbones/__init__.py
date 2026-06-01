@@ -64,6 +64,8 @@ from .vision_transformer2 import VisionTransformer2
 from .vit_eva02 import ViTEVA02
 from .vit_sam import ViTSAM
 from .xcit import XCiT
+#from .vit import VisionTransformer
+from .mae_vit_4d import MAEViT4D
 
 __all__ = [
     'LeNet5',
@@ -133,5 +135,7 @@ __all__ = [
     'HiViT',
     'SparseResNet',
     'SparseConvNeXt',
+    'VisionTransformer',
+    'MAEViT4D',
     'VisionTransformer2',
 ]

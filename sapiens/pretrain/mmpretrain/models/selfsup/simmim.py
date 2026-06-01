@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from mmengine.model.weight_init import trunc_normal_
 
-from mmpretrain.models import SwinTransformer
+from mmpretrain.models.backbones.swin_transformer import SwinTransformer
 from mmpretrain.registry import MODELS
 from mmpretrain.structures import DataSample
 from .base import BaseSelfSupervisor
