@@ -20,6 +20,9 @@ sapiens/pretrain/work_dirs/
 *.pt
 *.pkl
 
+# Paquetes Python (no deben estar en git)
+*.whl
+
 # Carpetas de resultados generados en runtime
 sapiens/pretrain/eval_baseline/
 sapiens/pretrain/eval_step2/
