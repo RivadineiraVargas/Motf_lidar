@@ -226,6 +226,10 @@ def predict_trajectories(valid_tracks):
 
     for i in range(len(ds)):
         d = ds[i]
+        # Dataset agora é multi-cena; renderizamos só a cena SCENE_ID (os obj_id
+        # se repetem entre cenas, então filtrar evita colisão/sobrescrita).
+        if d['scene_name'] != SCENE_ID:
+            continue
         obj_id = d['object_id']
         std  = d['norm_std'].numpy()
         mean = d['norm_mean'].numpy()
