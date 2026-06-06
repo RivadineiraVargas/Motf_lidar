@@ -13,9 +13,14 @@ class TrajectoryModelWithAttention(BaseModel):
                  embed_dim=1024,
                  num_heads=8,
                  hidden_dim=512,
+                 scene_dim=64,
+                 freeze_encoder=False,
                  **kwargs):
         super().__init__(**kwargs)
         self.encoder = MODELS.build(encoder)
+        if freeze_encoder:
+            for p in self.encoder.parameters():
+                p.requires_grad = False
         self.history_len = history_len
         self.pred_len = pred_len
         self.embed_dim = embed_dim
@@ -23,7 +28,16 @@ class TrajectoryModelWithAttention(BaseModel):
         self.history_proj = nn.Linear(history_len * 3, embed_dim)
         self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
 
-        input_dim = embed_dim + history_len * 3
+        # Rama de escena: normalizar + proyectar a poucas dims para que NÃO afogue
+        # o histórico (15 dims) na concatenação. Ver diagnóstico waymo_10 (1 cena).
+        self.scene_norm = nn.LayerNorm(embed_dim)
+        self.scene_proj = nn.Linear(embed_dim, scene_dim)
+        # Gate aprendível iniciado em 0 -> tanh(0)=0 -> modelo arranca ignorando a
+        # cena (comporta-se como o baseline) e só "abre" a rama se ela ajudar.
+        # Garante que nunca pode ser pior que o baseline.
+        self.scene_gate = nn.Parameter(torch.zeros(1))
+
+        input_dim = scene_dim + history_len * 3
         self.decoder = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
@@ -67,9 +81,13 @@ class TrajectoryModelWithAttention(BaseModel):
         attn_out, _ = self.cross_attn(query, latent, latent)      # (B, 1, embed_dim)
         attn_out = attn_out.squeeze(1)                             # (B, embed_dim)
 
-        # 4. Concatenar com história original e decodificar
-        combined = torch.cat([attn_out, obj_history_flat], dim=1) # (B, embed_dim + history_len*3)
-        pred_flat = self.decoder(combined)                         # (B, pred_len*3)
+        # 4. Normalizar, projetar a poucas dims e aplicar gate aprendível
+        scene_feat = self.scene_proj(self.scene_norm(attn_out))   # (B, scene_dim)
+        scene_feat = torch.tanh(self.scene_gate) * scene_feat     # gate -> arranca em 0
+
+        # 5. Concatenar com história original e decodificar
+        combined = torch.cat([scene_feat, obj_history_flat], dim=1)  # (B, scene_dim + history_len*3)
+        pred_flat = self.decoder(combined)                           # (B, pred_len*3)
 
         if mode == 'loss':
             if obj_future_flat is None:

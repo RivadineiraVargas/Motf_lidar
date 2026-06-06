@@ -47,7 +47,7 @@ bool read_bin_file(
     cv::Mat &out_image,
     float meters,
     int size_in_pixels,
-    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_ptr
+    pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_ptr = nullptr
 );
 
 
@@ -70,7 +70,6 @@ void transform_vertices(const std::vector<std::array<float, 3>>& vertices, float
 void transformar_para_sistema_lidar_topo(const std::vector<std::array<float, 3>>& bbox, float lidar_pose[4][4], std::vector<float>& result);
 void draw_bounding_box_birdview(const std::vector<float>& result, cv::Mat& birdview_image, float meters, int scale);
 void calculate_birdview_image(cv::Mat &birdview_image_color, size_t num_points, float meters, int size_in_pixels);
-void read_bin_file(const char *filename, size_t &num_points, cv::Mat &birdview_image, float meters, int size_in_pixels);
 bool read_pose_file(const char *filename, float pose[4][4]);
 void read_bbox_file(const char *objs_bbox_dir, const std::string& scene_name, const std::string& pose_name, std::vector<std::vector<std::array<float, 3>>> &all_bbox, float lidar_pose[4][4], cv::Mat& birdview_image, std::vector<std::vector<float>> &all_transformed_bbox_for_rangeview, float meters, int size_in_pixels, bool show_bboxes);
 

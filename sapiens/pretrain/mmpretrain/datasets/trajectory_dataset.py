@@ -18,12 +18,18 @@ class TrajectoryDataset(BaseDataset):
                  pred_len=5,
                  voxel_res=0.5,
                  spatial_range=[-40, 40, -40, 40, -2, 4],
+                 max_jump=5.0,
                  **kwargs):
         self.sequence_len = sequence_len
         self.history_len = history_len
         self.pred_len = pred_len
         self.voxel_res = voxel_res
         self.spatial_range = spatial_range
+        # Salto máximo plausível (m) entre frames consecutivos (~0.1s no Waymo).
+        # Descarta tracks corrompidos pelo bug de associação: os bbox usam índice
+        # por frame (não track ID persistente), então quando um objeto some os
+        # índices deslizam e o "mesmo" id salta para outro carro a dezenas de m.
+        self.max_jump = max_jump
 
         self.grid_x = int((spatial_range[1] - spatial_range[0]) / voxel_res)
         self.grid_y = int((spatial_range[3] - spatial_range[2]) / voxel_res)
@@ -112,18 +118,34 @@ class TrajectoryDataset(BaseDataset):
                     center_sensor = (np.linalg.inv(pose) @ center_hom)[:3]
 
                     object_tracks.setdefault(obj_id, []).append(
-                        (int(frame_dir), center_sensor)
+                        (int(frame_dir), center_sensor, np.array(center_global))
                     )
 
+            n_dropped = 0
             for obj_id, track in object_tracks.items():
                 track.sort(key=lambda x: x[0])
-                centers = [c for _, c in track]
-                if len(centers) >= self.sequence_len:
-                    data_list.append({
-                        'scene_name': scene,
-                        'object_id':  obj_id,
-                        'centers':    centers[:self.sequence_len],
-                    })
+                centers   = [c for _, c, _ in track]
+                globals_  = [g for _, _, g in track]
+                if len(centers) < self.sequence_len:
+                    continue
+
+                # Filtro de consistência: salto global implausível => track corrompido
+                seq_g = globals_[:self.sequence_len]
+                jumps = [np.linalg.norm(seq_g[k + 1] - seq_g[k])
+                         for k in range(self.sequence_len - 1)]
+                if max(jumps) > self.max_jump:
+                    n_dropped += 1
+                    continue
+
+                data_list.append({
+                    'scene_name': scene,
+                    'object_id':  obj_id,
+                    'centers':    centers[:self.sequence_len],
+                })
+
+            if n_dropped:
+                print(f'[TrajectoryDataset] cena {scene}: {n_dropped} tracks '
+                      f'descartados por salto > {self.max_jump}m (bug de associação)')
 
         return data_list
 
@@ -171,11 +193,13 @@ class TrajectoryDataset(BaseDataset):
         ref_center = np.array(centers[0])
         relative   = np.array([np.array(c) - ref_center for c in centers])
 
-        # CORRIGIDO: normalizar só com o histórico — sem data leakage
+        # Normalizar só com o histórico (sem data leakage).
+        # std mínimo 0.5m para evitar escala explosiva em objetos quase estáticos.
+        # Clip a [-5, 5] para descartar tracks fora do range do sensor.
         history_rel = relative[:self.history_len]
         mean_rel    = history_rel.mean(axis=0)
-        std_rel     = history_rel.std(axis=0) + 1e-6
-        relative_norm = (relative - mean_rel) / std_rel
+        std_rel     = np.maximum(history_rel.std(axis=0), 0.5)
+        relative_norm = np.clip((relative - mean_rel) / std_rel, -5.0, 5.0)
 
         obj_history_flat = relative_norm[:self.history_len].reshape(-1).astype(np.float32)
         obj_future_flat  = relative_norm[

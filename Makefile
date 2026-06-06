@@ -10,7 +10,7 @@ IFLAGS += -I/usr/include/bullet/ -I/usr/local/include/bullet/ \
          -I/usr/include/eigen3 -I/usr/local/include/pcl-1.8 -I/usr/include/vtk-7.1 -I/usr/include/GLFW
 
 LFLAGS += `pkg-config --libs opencv` -lpthread -lBulletCollision -lBulletDynamics \
-         -lBulletSoftBody -lLinearMath -lboost_thread-mt -lrt -lboost_signals -lboost_system \
+         -lBulletSoftBody -lLinearMath -lboost_thread-mt -lrt -lboost_system \
          -lpcl_io -lpcl_common -lpcl_io_ply -lpcl_visualization -lpcl_filters -lpcl_segmentation \
          -lGL -lGLU -lglfw -lGLEW
 LFLAGS += -lvtkRenderingCore-7.1 -lvtkCommonDataModel-7.1 -lvtkCommonMath-7.1 -lvtkCommonCore-7.1 -lvtkIOLegacy-7.1 -lvtkIOCore-7.1

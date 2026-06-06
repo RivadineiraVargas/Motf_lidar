@@ -25,17 +25,24 @@ import torch
 # ── Configuração ──────────────────────────────────────────────────────────────
 WAYMO_ROOT   = '/home/lcad/lidar_sweep_viewer/waymo_10'
 SCENE_ID     = '58d5f1b9e6a1a2f7'
-CHECKPOINT   = 'work_dirs/baseline_overfit_norm/epoch_200.pth'
 HISTORY_LEN  = 5
 PRED_LEN     = 5
 VOXEL_RES    = 2.0
 SPATIAL_RANGE = [-10, 10, -10, 10, -2, 4]
 
+# Modelo a visualizar: 'attn' (atenção-gated, contribuição da tese) ou 'baseline'
+MODEL_TYPE   = 'attn'
+CHECKPOINTS  = {
+    'attn':     'work_dirs/trajectory_attn_gated/epoch_500.pth',
+    'baseline': 'work_dirs/baseline_overfit_500/epoch_500.pth',
+}
+CHECKPOINT   = CHECKPOINTS[MODEL_TYPE]
+
 # Área de visualização em coordenadas do sensor (metros)
 VIEW_RANGE   = 30   # ±30m ao redor do ego-veículo
 
-OUT_IMAGE    = 'bev_trajectories.png'
-OUT_VIDEO    = 'bev_trajectories.mp4'
+OUT_IMAGE    = f'bev_trajectories_{MODEL_TYPE}.png'
+OUT_VIDEO    = f'bev_trajectories_{MODEL_TYPE}.mp4'
 
 
 # ── Funções auxiliares ────────────────────────────────────────────────────────
@@ -180,42 +187,67 @@ def load_all_object_tracks():
     return valid_tracks, poses
 
 
-def predict_trajectories(valid_tracks):
-    """Usa o modelo baseline para predizer trajetórias."""
-    from mmpretrain.models.trajectory_pred.baseline_model import BaselineTrajectoryModel
+def _build_model():
+    """Constrói o modelo (attn-gated ou baseline) e carrega o checkpoint."""
     from mmengine.runner import load_checkpoint
 
-    model = BaselineTrajectoryModel(history_len=HISTORY_LEN, pred_len=PRED_LEN)
+    if MODEL_TYPE == 'attn':
+        from mmengine.config import Config
+        from mmpretrain.models.trajectory_pred.trajectory_model_attn import \
+            TrajectoryModelWithAttention
+        from mmpretrain.models.backbones import mae_vit_4d  # registra MAEViT4D
+        cfg = Config.fromfile(
+            'configs/sapiens_mae/lidar/trajectory_attn_overfit.py')
+        margs = {k: v for k, v in cfg.model.items() if k != 'type'}
+        model = TrajectoryModelWithAttention(**margs)
+    else:
+        from mmpretrain.models.trajectory_pred.baseline_model import \
+            BaselineTrajectoryModel
+        model = BaselineTrajectoryModel(history_len=HISTORY_LEN, pred_len=PRED_LEN)
+
     load_checkpoint(model, CHECKPOINT, map_location='cpu')
     model.eval()
+    return model
+
+
+def predict_trajectories(valid_tracks):
+    """Prediz trajetórias usando o TrajectoryDataset — garante voxelização e
+    normalização IDÊNTICAS ao treino (std>=0.5, clip ±5). Casa por object_id."""
+    from mmpretrain.datasets import TrajectoryDataset
+
+    model = _build_model()
+    ds = TrajectoryDataset(
+        data_root=WAYMO_ROOT, sequence_len=HISTORY_LEN + PRED_LEN,
+        history_len=HISTORY_LEN, pred_len=PRED_LEN,
+        voxel_res=VOXEL_RES, spatial_range=SPATIAL_RANGE,
+    )
 
     predictions = {}   # obj_id → {'history', 'future_gt', 'future_pred'}
 
-    for obj_id, track in valid_tracks.items():
-        centers = np.array([c for _, c in track[:HISTORY_LEN + PRED_LEN]])
-
-        # Normalizar usando só o histórico (sem data leakage)
-        ref = centers[0]
-        relative = centers - ref
-        hist_rel  = relative[:HISTORY_LEN]
-        mean_rel  = hist_rel.mean(axis=0)
-        std_rel   = hist_rel.std(axis=0) + 1e-6
-        relative_norm = (relative - mean_rel) / std_rel
-
-        hist_norm   = relative_norm[:HISTORY_LEN]
-        future_norm = relative_norm[HISTORY_LEN:HISTORY_LEN + PRED_LEN]
-
-        hist_flat = torch.tensor(hist_norm.reshape(-1), dtype=torch.float32).unsqueeze(0)
+    for i in range(len(ds)):
+        d = ds[i]
+        obj_id = d['object_id']
+        std  = d['norm_std'].numpy()
+        mean = d['norm_mean'].numpy()
+        ref  = d['ref_center'].numpy()
 
         with torch.no_grad():
-            pred_flat = model(hist_flat, mode='predict')
+            if MODEL_TYPE == 'attn':
+                pred_flat = model(d['inputs'].unsqueeze(0),
+                                  d['obj_history_flat'].unsqueeze(0),
+                                  mode='predict')
+            else:
+                pred_flat = model(d['obj_history_flat'].unsqueeze(0),
+                                  mode='predict')
 
-        pred_norm = pred_flat.squeeze(0).view(PRED_LEN, 3).numpy()
+        pred_norm   = pred_flat.squeeze(0).view(PRED_LEN, 3).numpy()
+        hist_norm   = d['obj_history_flat'].view(HISTORY_LEN, 3).numpy()
+        future_norm = d['obj_future_flat'].view(PRED_LEN, 3).numpy()
 
-        # Desnormalizar
-        hist_world   = hist_norm   * std_rel + mean_rel + ref
-        future_world = future_norm * std_rel + mean_rel + ref
-        pred_world   = pred_norm   * std_rel + mean_rel + ref
+        # Desnormalizar de volta pro sensor frame: rel = norm*std+mean; world = rel+ref
+        hist_world   = hist_norm   * std + mean + ref
+        future_world = future_norm * std + mean + ref
+        pred_world   = pred_norm   * std + mean + ref
 
         predictions[obj_id] = {
             'history':    hist_world,

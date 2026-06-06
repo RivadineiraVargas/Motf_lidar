@@ -383,8 +383,10 @@ bool read_bin_file(
     ifs.seekg(0, std::ios::beg);
 
     num_points = num_bytes / (4 * sizeof(float));
-    cloud_ptr->clear();
-    cloud_ptr->points.reserve(num_points);
+    if (cloud_ptr) {
+        cloud_ptr->clear();
+        cloud_ptr->points.reserve(num_points);
+    }
 
     out_image = cv::Mat::zeros(size_in_pixels, size_in_pixels, CV_8UC1);
 
@@ -398,13 +400,15 @@ bool read_bin_file(
         float z = data[2];
         float intensity = data[3];
 
-        // Preenche PointCloud
-        pcl::PointXYZI p;
-        p.x = x;
-        p.y = y;
-        p.z = z;
-        p.intensity = intensity;
-        cloud_ptr->points.push_back(p);
+        // Preenche PointCloud (se fornecido)
+        if (cloud_ptr) {
+            pcl::PointXYZI p;
+            p.x = x;
+            p.y = y;
+            p.z = z;
+            p.intensity = intensity;
+            cloud_ptr->points.push_back(p);
+        }
 
         // Preenche Birdview
         int px = int((x + meters) * scale);
@@ -416,9 +420,11 @@ bool read_bin_file(
         }
     }
 
-    cloud_ptr->width = cloud_ptr->points.size();
-    cloud_ptr->height = 1;
-    cloud_ptr->is_dense = false;
+    if (cloud_ptr) {
+        cloud_ptr->width = cloud_ptr->points.size();
+        cloud_ptr->height = 1;
+        cloud_ptr->is_dense = false;
+    }
 
     return true;
 }

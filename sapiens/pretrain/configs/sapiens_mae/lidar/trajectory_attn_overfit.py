@@ -55,23 +55,26 @@ model = dict(
     embed_dim=1024,
     num_heads=8,
     hidden_dim=512,
+    scene_dim=64,
+    freeze_encoder=True,
 )
 
 # ── Otimizador ────────────────────────────────────────────────────
 optim_wrapper = dict(
     type='OptimWrapper',
-    optimizer=dict(type='AdamW', lr=1e-4, weight_decay=1e-4)
+    optimizer=dict(type='AdamW', lr=1e-3, weight_decay=1e-4)
 )
 
 # ── Runtime ───────────────────────────────────────────────────────
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=200)
+# Run completo: arquitetura gated (LayerNorm + proj 64 + gate). Objetivo:
+# confirmar que chega a ~baseline (~0.44) sem colapsar.
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=500)
 
 default_hooks = dict(
-    checkpoint=dict(interval=50, max_keep_ckpts=2),
+    checkpoint=dict(interval=100, max_keep_ckpts=2),
     logger=dict(interval=10),
 )
 
-work_dir = './work_dirs/trajectory_attn_overfit'
+work_dir = './work_dirs/trajectory_attn_gated'
 
-# FASE 1 — com encoder pré-treinado (descomentar após ter o checkpoint):
-# load_from = './work_dirs/mae_lidar_10_overfit/epoch_4000.pth'
+load_from = './work_dirs/mae_encoder_pretrained.pth'

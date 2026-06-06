@@ -1,31 +1,24 @@
 #!/bin/bash
-# Script de entrenamiento nocturno — MAE LiDAR 4D pre-entrenamiento completo
+# Entrenamiento: trajectory_attn_frozen_encoder (500 épocas, ~12h)
+# Ejecutar a las 22:00 del 2026-06-03
 
-TARGET_HOUR=22
-TARGET_MIN=0
-LOG_FILE="/home/lcad/lidar_sweep_viewer/training_log_$(date +%Y%m%d_%H%M%S).txt"
-TRAIN_DIR="/home/lcad/lidar_sweep_viewer/sapiens/pretrain"
-CONFIG="configs/sapiens_mae/lidar/mae_lidar_10_overfit.py"
+set -e
 
-echo "[$(date)] Script iniciado. Esperando hasta las ${TARGET_HOUR}:${TARGET_MIN}..." | tee "$LOG_FILE"
+LOG_FILE="$HOME/lidar_sweep_viewer/training_frozen_$(date +%Y%m%d_%H%M%S).txt"
+WORKDIR="/home/lcad/lidar_sweep_viewer/sapiens/pretrain"
+CONFIG="configs/sapiens_mae/lidar/trajectory_attn_overfit.py"
 
-# Calcular segundos hasta las 22:00
-NOW=$(date +%s)
-TARGET=$(date -d "today ${TARGET_HOUR}:${TARGET_MIN}:00" +%s)
+echo "Iniciando entrenamiento: $(date)" | tee "$LOG_FILE"
+echo "Config: $CONFIG" | tee -a "$LOG_FILE"
+echo "Log: $LOG_FILE" | tee -a "$LOG_FILE"
+echo "---" | tee -a "$LOG_FILE"
 
-# Si ya pasaron las 22:00, esperar hasta mañana
-if [ "$TARGET" -le "$NOW" ]; then
-    TARGET=$(date -d "tomorrow ${TARGET_HOUR}:${TARGET_MIN}:00" +%s)
-    echo "[$(date)] Ya pasaron las ${TARGET_HOUR}:00 — agendado para mañana." | tee -a "$LOG_FILE"
-fi
+cd "$WORKDIR"
 
-WAIT=$((TARGET - NOW))
-echo "[$(date)] Esperando ${WAIT} segundos (hasta las $(date -d "@$TARGET"))..." | tee -a "$LOG_FILE"
-sleep "$WAIT"
+source /home/lcad/miniconda3/etc/profile.d/conda.sh
+conda activate sapiens_final
 
-echo "[$(date)] Iniciando entrenamiento MAE LiDAR (4000 épocas)..." | tee -a "$LOG_FILE"
-cd "$TRAIN_DIR" || { echo "ERROR: no se encontró $TRAIN_DIR"; exit 1; }
+python tools/train.py "$CONFIG" 2>&1 | tee -a "$LOG_FILE"
 
-conda run -n sapiens_final python tools/train.py "$CONFIG" 2>&1 | tee -a "$LOG_FILE"
-
-echo "[$(date)] Entrenamiento finalizado." | tee -a "$LOG_FILE"
+echo "---" | tee -a "$LOG_FILE"
+echo "Entrenamiento finalizado: $(date)" | tee -a "$LOG_FILE"

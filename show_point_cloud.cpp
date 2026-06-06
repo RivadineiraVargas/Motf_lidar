@@ -2,10 +2,74 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <fstream>
+#include <sstream>
+#include <map>
+#include <algorithm>
 #include <opencv/highgui.h>
 
 namespace fs = std::filesystem;
 using namespace std;
+
+// ── Predições do modelo (exportadas por export_predictions_global.py) ──────────
+// kind: 0 = histórico (cinza), 1 = futuro real (verde), 2 = futuro predito (vermelho)
+struct TrajPoint { int kind; int t; float x, y, z; };
+// scene -> obj_id -> pontos (coords GLOBAIS)
+static std::map<std::string, std::map<std::string, std::vector<TrajPoint>>> g_predictions;
+
+static void load_predictions(const std::string& path) {
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) {
+        printf("Aviso: predições não encontradas em '%s' (viewer roda sem elas).\n", path.c_str());
+        return;
+    }
+    std::string scene, oid, line;
+    int kind, t; float x, y, z, count = 0;
+    while (std::getline(ifs, line)) {
+        std::istringstream ss(line);
+        if (ss >> scene >> oid >> kind >> t >> x >> y >> z) {
+            g_predictions[scene][oid].push_back({kind, t, x, y, z});
+            count++;
+        }
+    }
+    printf("Predições carregadas: %.0f pontos.\n", count);
+}
+
+// Desenha as trajetórias no BEV: transforma global->sensor com inv(pose) e projeta.
+static void draw_predictions_birdview(cv::Mat& birdview, const std::string& scene,
+                                      float pose[4][4], float meters, int size_in_pixels) {
+    auto it = g_predictions.find(scene);
+    if (it == g_predictions.end()) return;
+
+    float scale = size_in_pixels / (2.0f * meters);
+    float inv[4][4];
+    if (!invert_matrix(pose, inv)) return;
+
+    for (auto& kv : it->second) {
+        for (int kind = 0; kind <= 2; ++kind) {
+            std::vector<std::pair<int, cv::Point>> proj;
+            for (auto& p : kv.second) {
+                if (p.kind != kind) continue;
+                float gh[4] = { p.x, p.y, p.z, 1.0f }, s[4];
+                multiply_matrix_vector(inv, gh, s);
+                int xp = (int)((s[0] + meters) * scale);
+                int yp = (int)((meters - s[1]) * scale);
+                proj.push_back({ p.t, cv::Point(xp, yp) });
+            }
+            std::sort(proj.begin(), proj.end(),
+                      [](const std::pair<int,cv::Point>& a, const std::pair<int,cv::Point>& b){
+                          return a.first < b.first; });
+            cv::Scalar color = (kind == 0) ? cv::Scalar(160,160,160)   // histórico
+                             : (kind == 1) ? cv::Scalar(0,255,0)       // real (verde)
+                                           : cv::Scalar(0,0,255);      // predito (vermelho)
+            int thick = (kind == 0) ? 1 : 2;
+            for (size_t i = 1; i < proj.size(); ++i)
+                cv::line(birdview, proj[i-1].second, proj[i].second, color, thick, cv::LINE_AA);
+            for (auto& pr : proj)
+                cv::circle(birdview, pr.second, 3, color, -1, cv::LINE_AA);
+        }
+    }
+}
 
 int main(int argc, char** argv) {
     bool draw_red_points = true;
@@ -16,6 +80,7 @@ int main(int argc, char** argv) {
     int size_in_pixels = 1024;
     bool paused = false;
     bool show_bboxes = false;
+    bool show_predictions = true;
 
     // --- 1. Processamento de Argumentos ---
     for (int i = 1; i < argc; ++i) {
@@ -68,6 +133,9 @@ int main(int argc, char** argv) {
     const char *bbox_root_dir = bbox_root_str.c_str();
 
     std::chrono::duration<double> global_delta_time(0.0);
+
+    // Carregar predições do modelo (se existir o arquivo no diretório atual)
+    load_predictions("predictions_global.txt");
 
     // --- 3. Listar Cenas ---
     vector<string> scenes = list_subdirectories(bin_root_dir);
@@ -186,7 +254,11 @@ int main(int argc, char** argv) {
             vector<vector<array<float, 3>>> all_bbox;
             vector<vector<float>> all_transformed_bbox_for_rangeview;
             read_bbox_file(bbox_root_dir, scenes[s], pose_file_name, all_bbox, pose, birdview_image, all_transformed_bbox_for_rangeview, meters, size_in_pixels, show_bboxes);
-           
+
+            // Desenhar trajetórias preditas/reais sobre o BEV (tecla 't' alterna)
+            if (show_predictions)
+                draw_predictions_birdview(birdview_image, scenes[s], pose, meters, size_in_pixels);
+
             if (show) {
                 float *points_xyz = (float*) malloc(num_points * POINTS_PER_RECORD * sizeof(float));
 
@@ -277,7 +349,11 @@ int main(int argc, char** argv) {
                     else if ((key == 66) || (key == 98)) {
                         show_bboxes = !show_bboxes;
                         break; // b
-                    }   
+                    }
+                    else if ((key == 84) || (key == 116)) {
+                        show_predictions = !show_predictions;
+                        break; // t — alterna trajetórias preditas
+                    }
                     else if ((key == 82) || (key == 114)) {
                         draw_red_points = !draw_red_points;
                         break; // r

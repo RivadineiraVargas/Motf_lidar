@@ -32,6 +32,23 @@ sapiens/pretrain/evaluation_plots/
 *.mp4
 *.gif
 
+# Binarios C++ compilados
+/show_point_cloud
+/voxel_representation
+
+# Logs de entrenamiento y salidas generadas en runtime
+training_*.txt
+baseline_log.txt
+finetuning_log.txt
+training_now.txt
+predictions_global.txt
+*.npz
+
+# Imágenes de visualización generadas (se versionan curadas en docs/imagenes/)
+sapiens/pretrain/dashboard_*.png
+sapiens/pretrain/viz_3d_*.png
+sapiens/pretrain/bev_trajectories_*.png
+
 # Archivos temporales de editores
 *.swp
 *.swo
