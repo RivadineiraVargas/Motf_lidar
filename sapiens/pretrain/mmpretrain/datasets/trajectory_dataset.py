@@ -19,12 +19,15 @@ class TrajectoryDataset(BaseDataset):
                  voxel_res=0.5,
                  spatial_range=[-40, 40, -40, 40, -2, 4],
                  max_jump=5.0,
+                 scenes=None,
                  **kwargs):
         self.sequence_len = sequence_len
         self.history_len = history_len
         self.pred_len = pred_len
         self.voxel_res = voxel_res
         self.spatial_range = spatial_range
+        # Lista branca de cenas a incluir (p/ split train/val). None = todas.
+        self.scenes = set(scenes) if scenes is not None else None
         # Salto máximo plausível (m) entre frames consecutivos (~0.1s no Waymo).
         # Descarta tracks corrompidos pelo bug de associação: os bbox usam índice
         # por frame (não track ID persistente), então quando um objeto some os
@@ -79,6 +82,9 @@ class TrajectoryDataset(BaseDataset):
             d for d in os.listdir(bin_root)
             if os.path.isdir(os.path.join(bin_root, d))
         ])
+        # Filtrar pela lista branca (split train/val), se fornecida
+        if self.scenes is not None:
+            scenes = [s for s in scenes if s in self.scenes]
 
         data_list = []
         for scene in scenes:
