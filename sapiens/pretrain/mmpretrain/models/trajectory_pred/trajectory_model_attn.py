@@ -15,6 +15,7 @@ class TrajectoryModelWithAttention(BaseModel):
                  hidden_dim=512,
                  scene_dim=64,
                  freeze_encoder=False,
+                 use_gate=True,
                  **kwargs):
         super().__init__(**kwargs)
         self.encoder = MODELS.build(encoder)
@@ -24,6 +25,10 @@ class TrajectoryModelWithAttention(BaseModel):
         self.history_len = history_len
         self.pred_len = pred_len
         self.embed_dim = embed_dim
+        # use_gate=False -> rama de escena SIEMPRE activa (sin tanh(gate)).
+        # Test limpio (Opción C): da gradiente completo a scene_proj/cross_attn
+        # para que aprendan, rompiendo el candado del gate iniciado en 0.
+        self.use_gate = use_gate
 
         self.history_proj = nn.Linear(history_len * 3, embed_dim)
         self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
@@ -81,9 +86,11 @@ class TrajectoryModelWithAttention(BaseModel):
         attn_out, _ = self.cross_attn(query, latent, latent)      # (B, 1, embed_dim)
         attn_out = attn_out.squeeze(1)                             # (B, embed_dim)
 
-        # 4. Normalizar, projetar a poucas dims e aplicar gate aprendível
+        # 4. Normalizar, projetar a poucas dims e (opcionalmente) aplicar gate
         scene_feat = self.scene_proj(self.scene_norm(attn_out))   # (B, scene_dim)
-        scene_feat = torch.tanh(self.scene_gate) * scene_feat     # gate -> arranca em 0
+        if self.use_gate:
+            scene_feat = torch.tanh(self.scene_gate) * scene_feat  # gate -> arranca em 0
+        # use_gate=False: escena siempre activa, gradiente completo a la rama
 
         # 5. Concatenar com história original e decodificar
         combined = torch.cat([scene_feat, obj_history_flat], dim=1)  # (B, scene_dim + history_len*3)

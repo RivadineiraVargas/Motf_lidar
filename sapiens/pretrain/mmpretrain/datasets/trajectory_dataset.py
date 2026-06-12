@@ -19,6 +19,8 @@ class TrajectoryDataset(BaseDataset):
                  voxel_res=0.5,
                  spatial_range=[-40, 40, -40, 40, -2, 4],
                  max_jump=5.0,
+                 scenes=None,
+                 augment=False,
                  **kwargs):
         self.sequence_len = sequence_len
         self.history_len = history_len
@@ -30,6 +32,8 @@ class TrajectoryDataset(BaseDataset):
         # por frame (não track ID persistente), então quando um objeto some os
         # índices deslizam e o "mesmo" id salta para outro carro a dezenas de m.
         self.max_jump = max_jump
+        self.scenes   = set(scenes) if scenes is not None else None
+        self.augment  = augment
 
         self.grid_x = int((spatial_range[1] - spatial_range[0]) / voxel_res)
         self.grid_y = int((spatial_range[3] - spatial_range[2]) / voxel_res)
@@ -79,6 +83,8 @@ class TrajectoryDataset(BaseDataset):
             d for d in os.listdir(bin_root)
             if os.path.isdir(os.path.join(bin_root, d))
         ])
+        if self.scenes is not None:
+            scenes = [s for s in scenes if s in self.scenes]
 
         data_list = []
         for scene in scenes:
@@ -184,6 +190,36 @@ class TrajectoryDataset(BaseDataset):
         grid[ix, iy, iz] = 1.0
         return grid
 
+    def _augment(self, relative, voxel_sequences):
+        """Rotación aleatoria 0/90/180/270° + flip opcional en plano XY.
+        Aplicada consistentemente a trayectoria y vóxeles.
+        """
+        k    = np.random.randint(0, 4)   # número de rotaciones de 90°
+        flip = bool(np.random.randint(0, 2))
+
+        # Rotar trayectoria XY, dejar Z intacto
+        rel = relative.copy()
+        if flip:
+            rel[:, 0] = -rel[:, 0]
+        angles = [0.0, np.pi / 2, np.pi, 3 * np.pi / 2]
+        cos_a, sin_a = np.cos(angles[k]), np.sin(angles[k])
+        x_new = rel[:, 0] * cos_a - rel[:, 1] * sin_a
+        y_new = rel[:, 0] * sin_a + rel[:, 1] * cos_a
+        rel[:, 0] = x_new
+        rel[:, 1] = y_new
+
+        # Rotar grilla de vóxeles (grid_x, grid_y, grid_z) en plano XY
+        aug_voxels = []
+        for grid in voxel_sequences:
+            g = grid.copy()
+            if flip:
+                g = g[::-1, :, :].copy()
+            if k > 0:
+                g = np.rot90(g, k=k, axes=(0, 1)).copy()
+            aug_voxels.append(g)
+
+        return rel, aug_voxels
+
     def __getitem__(self, idx):
         item   = self.data_list[idx]
         scene  = item['scene_name']
@@ -192,6 +228,18 @@ class TrajectoryDataset(BaseDataset):
         # Deslocamentos relativos ao primeiro frame
         ref_center = np.array(centers[0])
         relative   = np.array([np.array(c) - ref_center for c in centers])
+
+        # Tokens de cena (cargar antes de augmentación para rotar consistentemente)
+        scene_bin = os.path.join(self.data_root, 'bin_files', scene)
+        voxel_sequences = []
+        for i in range(self.history_len):
+            points = self.load_bin(os.path.join(scene_bin, f"{i}.bin"))
+            grid   = self.point_cloud_to_voxel_grid(points)
+            voxel_sequences.append(grid)
+
+        # Augmentación: rotar trayectoria + vóxeles consistentemente
+        if self.augment:
+            relative, voxel_sequences = self._augment(relative, voxel_sequences)
 
         # Normalizar só com o histórico (sem data leakage).
         # std mínimo 0.5m para evitar escala explosiva em objetos quase estáticos.
@@ -205,14 +253,6 @@ class TrajectoryDataset(BaseDataset):
         obj_future_flat  = relative_norm[
             self.history_len:self.history_len + self.pred_len
         ].reshape(-1).astype(np.float32)
-
-        # Tokens de cena
-        scene_bin = os.path.join(self.data_root, 'bin_files', scene)
-        voxel_sequences = []
-        for i in range(self.history_len):
-            points = self.load_bin(os.path.join(scene_bin, f"{i}.bin"))
-            grid   = self.point_cloud_to_voxel_grid(points)
-            voxel_sequences.append(grid)
 
         history = np.stack(voxel_sequences, axis=0)
         tokens  = history.reshape(self.history_len, -1).T  # (num_voxels, history_len)
