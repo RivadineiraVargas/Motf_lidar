@@ -17,6 +17,18 @@ This module captures the lidar messages to create a runtime visualization of the
 
 Primeiro baixe um dos exemplos através desses links ([waymo_10](https://drive.google.com/file/d/1r6ZK1GBGBJ_HPMohtXgqvP4HfKaG7LyH/view?usp=sharing) | [waymo_100](https://drive.google.com/file/d/14tn2D7QxNo3MLwXRuiXZNeUWUHws2UDV/view?usp=sharing) | [waymo_1000](https://drive.google.com/file/d/1z4b0QzQHsxyFNNvcqHzuCptoDm_DUdRO/view?usp=sharing)) e salve no diretório de preferência em sua máquina.
 
+> ⚠️ Os links acima são da extração **antiga (com bugs)** do colega. Ver `docs/BUGS_DATOS.md`.
+
+#### 🧼 Dataset LIMPIO (re-extraído, FASE 1 — waymo_10)
+
+Re-extração corrigida do WOMD-LiDAR (`track.id` persistente + horizonte de 9s).
+**10 escenas** (8 train / 2 val) — a FASE 1 do protocolo 10 → 100 → 1000.
+Detalhes dos bugs corrigidos em [`docs/BUGS_DATOS.md`](docs/BUGS_DATOS.md) e resultados
+em [`docs/RESULTADOS_ADE_FDE.md`](docs/RESULTADOS_ADE_FDE.md).
+
+- **Download (Google Drive):** [waymo_clean_10 (10 escenas limpias)](https://drive.google.com/drive/folders/17y9AWA5OOa31hUmEO7jFD5T0Bni3G5Fp?usp=sharing)
+- Contém `bin_files/`, `objs_bbox/` (nomes = `track.id`) e `poses/` + um `LEEME.txt`.
+
 Agora descompacte o arquivo baixado no mesmo diretório:
 
 ```
