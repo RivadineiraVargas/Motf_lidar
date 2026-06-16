@@ -54,7 +54,7 @@ maniobras (giros, frenadas, interacciones entre agentes) que el histórico no pu
 extrapolar. Eso requiere **datos limpios con horizonte largo**: re-extracción
 WOMD-LiDAR con `track.id` (`utilities/save_point_cloud_data_fixed.py`).
 
-## Reproducir
+## Reproducir (experimentos con encoder viejo, waymo_10)
 
 ```bash
 conda activate sapiens_gpu
@@ -68,3 +68,61 @@ Checkpoints:
 - `work_dirs/trajectory_attn_multiescena/epoch_300.pth` (gated, sin aug)
 - `work_dirs/trajectory_attn_augmented/epoch_500.pth` (gated, con aug)
 - `work_dirs/trajectory_attn_nogate/epoch_500.pth` (sin gate, con aug)
+
+---
+
+# FASE 1 — Datos limpios (waymo_clean) + encoder re-pretrenado (2026-06-15)
+
+Protocolo de Claudine (10 → 100 → 1000). FASE 1 = 10 escenas limpias (8 train /
+2 val), horizonte **3s**, encoder MAE **re-pretrenado en las 8 escenas de train**
+(antes era 1 sola escena vieja). Ver `docs/BUGS_DATOS.md` por qué los datos viejos
+estaban sucios, y `docs/NEXT_SESSION.md` por el pipeline.
+
+## Tabla comparativa (horizonte 3s, encoder nuevo)
+
+| Métrica | Baseline | Gated | **SinGate** |
+|---|---|---|---|
+| Train ADE | **0.667 m** | 0.875 m | 0.730 m |
+| Val ADE | 2.013 m | 2.303 m | **1.492 m** ✅ |
+| Val FDE | 2.417 m | 2.808 m | **1.877 m** ✅ |
+| Total ADE | 0.857 m | 1.077 m | **0.838 m** ✅ |
+| Total FDE | 1.060 m | 1.300 m | **1.008 m** ✅ |
+
+## Hallazgo principal: la escena LiDAR YA APORTA, y con fuerza
+
+```
+Val ADE:  2.013 (baseline) → 1.492 (SinGate)  =  -26%
+Val FDE:  2.417 (baseline) → 1.877 (SinGate)  =  -22%
+```
+
+Evolución del beneficio de la escena en val (escenas no vistas):
+
+| Configuración | Beneficio de la escena |
+|---|---|
+| 0.5s, encoder viejo (1 escena) | inútil (igual/peor que baseline) |
+| 3s, encoder viejo (1 escena) | +4% (señal débil) |
+| **3s, encoder NUEVO (8 escenas limpias)** | **+26% (claro)** |
+
+→ Confirma DOS hipótesis juntas: la escena necesita (1) **horizonte largo** para
+que haya maniobras, y (2) un **encoder bien pre-entrenado** en datos limpios.
+
+## El gate sigue cerrado (el que captura el beneficio es SinGate)
+
+`tanh(scene_gate) = -0.0047` → el modelo gated mantiene el candado de gradiente
+(rama de escena nunca aprende). El beneficio lo captura **SinGate** (escena forzada
+activa), test científicamente limpio. Pendiente: repensar el gate (warmup / init
+distinto) para que el modelo lo abra solo.
+
+## Próximo paso del protocolo
+
+SinGate (1.492) < baseline (2.013) en val → **se cumple la condición de escalar**.
+Siguiente: FASE 2 = waymo_100 (bajar más LiDAR, repetir).
+
+## Reproducir Fase 1
+
+```bash
+conda activate sapiens_gpu
+cd sapiens/pretrain
+bash run_next_session.sh            # MAE → encoder → baseline+gated+nogate → eval
+python evaluate_clean10_newmae.py   # solo evaluar si ya están los checkpoints
+```

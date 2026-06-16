@@ -18,12 +18,15 @@ class LidarSequenceDataset(BaseDataset):
                  voxel_res=0.5,
                  spatial_range=[-40, 40, -40, 40, -2, 4],
                  mask_ratio=0.75,
+                 scenes=None,
                  **kwargs):
         self.sequence_len = sequence_len
         self.history_len = history_len
         self.voxel_res = voxel_res
         self.spatial_range = spatial_range
         self.mask_ratio = mask_ratio
+        # Restringe a una whitelist de escenas (protocolo 10/100/1000 de Claudine)
+        self.scenes = set(scenes) if scenes is not None else None
 
         self.grid_x = int((spatial_range[1] - spatial_range[0]) / voxel_res)
         self.grid_y = int((spatial_range[3] - spatial_range[2]) / voxel_res)
@@ -50,6 +53,8 @@ class LidarSequenceDataset(BaseDataset):
             d for d in os.listdir(bin_dir)
             if os.path.isdir(os.path.join(bin_dir, d))
         ])
+        if self.scenes is not None:
+            scenes = [s for s in scenes if s in self.scenes]
 
         for scene in scenes:
             scene_path = os.path.join(bin_dir, scene)
