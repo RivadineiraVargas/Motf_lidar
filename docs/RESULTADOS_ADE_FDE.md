@@ -106,17 +106,33 @@ Evolución del beneficio de la escena en val (escenas no vistas):
 → Confirma DOS hipótesis juntas: la escena necesita (1) **horizonte largo** para
 que haya maniobras, y (2) un **encoder bien pre-entrenado** en datos limpios.
 
-## El gate sigue cerrado (el que captura el beneficio es SinGate)
+## El gate cerrado y su ARREGLO (Prioridad 1 — 2026-06-16)
 
-`tanh(scene_gate) = -0.0047` → el modelo gated mantiene el candado de gradiente
-(rama de escena nunca aprende). El beneficio lo captura **SinGate** (escena forzada
-activa), test científicamente limpio. Pendiente: repensar el gate (warmup / init
-distinto) para que el modelo lo abra solo.
+Con `gate_init=0` el modelo gated mantenía el candado de gradiente
+(`tanh(scene_gate) = -0.0047`, la rama de escena nunca aprendía). **Fix:** parámetro
+`gate_init` en el modelo — arrancar el gate en `tanh=0.5` da gradiente real a la rama
+desde la época 1, rompiendo el candado, pero manteniendo el gate APRENDIBLE.
+
+Resultado (`clean10_gated_init.py`, gate_init=0.5):
+
+| Métrica | Baseline | **Gated (init 0.5)** | SinGate |
+|---|---|---|---|
+| Val ADE | 2.013 m | **1.303 m** ✅ | 1.492 m |
+| Val FDE | 2.417 m | **1.733 m** ✅ | 1.877 m |
+| Total ADE | 0.857 m | **0.767 m** ✅ | 0.838 m |
+| Total FDE | 1.060 m | **0.893 m** ✅ | 1.008 m |
+
+- El gate **aprendió y se quedó abierto** en `tanh=0.20` (no colapsó a 0).
+- Es el MEJOR de los tres: **Val ADE -35% vs baseline** (mejor que SinGate -26%).
+- Un peso de escena moderado (0.20) regulariza mejor que forzarla al 100% (SinGate).
+
+→ **Contribución limpia:** el modelo aprende solo cuánto pesar el contexto LiDAR.
 
 ## Próximo paso del protocolo
 
-SinGate (1.492) < baseline (2.013) en val → **se cumple la condición de escalar**.
-Siguiente: FASE 2 = waymo_100 (bajar más LiDAR, repetir).
+Gated init (1.303) < baseline (2.013) en val → **se cumple la condición de escalar**.
+Antes de escalar (protocolo 10→100→1000), completar con 10: curva multi-horizonte,
+incerteza, informe (ver memoria project_prioridades). Luego FASE 2 = waymo_100.
 
 ## Reproducir Fase 1
 

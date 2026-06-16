@@ -16,6 +16,7 @@ class TrajectoryModelWithAttention(BaseModel):
                  scene_dim=64,
                  freeze_encoder=False,
                  use_gate=True,
+                 gate_init=0.0,
                  **kwargs):
         super().__init__(**kwargs)
         self.encoder = MODELS.build(encoder)
@@ -37,10 +38,14 @@ class TrajectoryModelWithAttention(BaseModel):
         # o histórico (15 dims) na concatenação. Ver diagnóstico waymo_10 (1 cena).
         self.scene_norm = nn.LayerNorm(embed_dim)
         self.scene_proj = nn.Linear(embed_dim, scene_dim)
-        # Gate aprendível iniciado em 0 -> tanh(0)=0 -> modelo arranca ignorando a
-        # cena (comporta-se como o baseline) e só "abre" a rama se ela ajudar.
-        # Garante que nunca pode ser pior que o baseline.
-        self.scene_gate = nn.Parameter(torch.zeros(1))
+        # Gate aprendível. gate_init = valor INICIAL de tanh(scene_gate):
+        #   0.0  -> arranca ignorando la escena (candado de gradiente: nunca abre).
+        #   ~0.5 -> arranca usando la escena a medias, dándole gradiente real a la
+        #           rama para que aprenda; luego el gate sube/baja según ayude o no.
+        # Rompe el candado manteniendo la decisión aprendible. atanh(v) tal que
+        # tanh(scene_gate_init) = gate_init.
+        gate_init = float(max(min(gate_init, 0.99), -0.99))
+        self.scene_gate = nn.Parameter(torch.atanh(torch.tensor([gate_init])))
 
         input_dim = scene_dim + history_len * 3
         self.decoder = nn.Sequential(
