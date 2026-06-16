@@ -128,11 +128,39 @@ Resultado (`clean10_gated_init.py`, gate_init=0.5):
 
 → **Contribución limpia:** el modelo aprende solo cuánto pesar el contexto LiDAR.
 
+## Curva multi-horizonte (Prioridad 2 — 2026-06-16)
+
+Se entrenó baseline + gated_init a pred_len 10/20/30/50 (1/2/3/5s) y se evaluó con
+metodología **PAREADA**: los mismos 24 tracks (los que sobreviven a 5s en las 2
+escenas de val), para que la comparación entre horizontes sea justa (mismos autos).
+Scripts: `multi_horizon.sh`, `eval_multi_horizon_sametrack.py`.
+
+| Horizonte | Baseline | Gated | Mejora ADE | **Gate aprendido** |
+|---|---|---|---|---|
+| 1s | 1.171 m | 1.138 m | +2.9% | +0.091 |
+| 2s | 1.146 m | 1.183 m | −3.2% | +0.172 |
+| 3s | 1.500 m | 1.126 m | **+24.9%** | +0.197 |
+| 5s | 1.536 m | 1.594 m | −3.8% | +0.259 |
+
+**Resultado robusto — la curva del GATE:** el peso de la escena que el modelo APRENDE
+crece monótonamente con el horizonte (0.091 → 0.172 → 0.197 → 0.259, todos arrancaron
+en 0.5). El modelo aprende a confiar más en la escena cuanto más lejos predice — es
+evidencia directa de la tesis, a nivel del mecanismo (no depende de las 24 muestras).
+
+**Curva de ADE (tentativa, 24 muestras):** el beneficio se materializa a 3s (+25%) —
+el punto dulce donde hay maniobras y el objeto aún está en el rango del LiDAR (±10m).
+A 1s/2s es neutral (el histórico basta); a 5s es neutral pese al gate alto porque el
+objeto suele salir del rango ±10m (la escena local ya no tiene la info).
+
+Límite: 2 escenas de val = 24 tracks → la curva de ADE es ruidosa (el gate no). En
+FASE 2 (100 escenas) la curva de ADE se vuelve sólida. Gráfico:
+`curva_multi_horizonte_pareada.png` (3 paneles: ADE, mejora %, gate vs horizonte).
+
 ## Próximo paso del protocolo
 
 Gated init (1.303) < baseline (2.013) en val → **se cumple la condición de escalar**.
-Antes de escalar (protocolo 10→100→1000), completar con 10: curva multi-horizonte,
-incerteza, informe (ver memoria project_prioridades). Luego FASE 2 = waymo_100.
+Completadas Prioridad 1 (gate) y 2 (multi-horizonte). Faltan con 10: incerteza (P3),
+informe (P4). Luego FASE 2 = waymo_100.
 
 ## Reproducir Fase 1
 
