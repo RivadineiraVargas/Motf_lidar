@@ -17,6 +17,7 @@ class TrajectoryModelWithAttention(BaseModel):
                  freeze_encoder=False,
                  use_gate=True,
                  gate_init=0.0,
+                 predict_uncertainty=False,
                  **kwargs):
         super().__init__(**kwargs)
         self.encoder = MODELS.build(encoder)
@@ -47,6 +48,12 @@ class TrajectoryModelWithAttention(BaseModel):
         gate_init = float(max(min(gate_init, 0.99), -0.99))
         self.scene_gate = nn.Parameter(torch.atanh(torch.tensor([gate_init])))
 
+        # predict_uncertainty=True -> el decoder predice media Y log-varianza por
+        # cada coordenada (incerteza aleatoria). El PDF la pide: covarianza por pose
+        # para el Behavior Selector. Salida doble: pred_len*3 (mu) + pred_len*3 (log_var).
+        self.predict_uncertainty = predict_uncertainty
+        out_dim = pred_len * 3 * (2 if predict_uncertainty else 1)
+
         input_dim = scene_dim + history_len * 3
         self.decoder = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -55,7 +62,7 @@ class TrajectoryModelWithAttention(BaseModel):
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, pred_len * 3)
+            nn.Linear(hidden_dim, out_dim)
         )
 
     def _encode_scene(self, inputs):
@@ -99,12 +106,28 @@ class TrajectoryModelWithAttention(BaseModel):
 
         # 5. Concatenar com história original e decodificar
         combined = torch.cat([scene_feat, obj_history_flat], dim=1)  # (B, scene_dim + history_len*3)
-        pred_flat = self.decoder(combined)                           # (B, pred_len*3)
+        out = self.decoder(combined)
 
+        if not self.predict_uncertainty:
+            pred_flat = out                                          # (B, pred_len*3)
+            if mode == 'loss':
+                if obj_future_flat is None:
+                    raise ValueError("obj_future_flat obrigatório no modo 'loss'")
+                return dict(loss=nn.functional.mse_loss(pred_flat, obj_future_flat))
+            return pred_flat
+
+        # Con incerteza: dividir en media y log-varianza
+        D = self.pred_len * 3
+        mu, log_var = out[:, :D], out[:, D:]                         # cada (B, pred_len*3)
+        # clamp para estabilidad numérica
+        log_var = torch.clamp(log_var, min=-10.0, max=10.0)
         if mode == 'loss':
             if obj_future_flat is None:
                 raise ValueError("obj_future_flat obrigatório no modo 'loss'")
-            loss = nn.functional.mse_loss(pred_flat, obj_future_flat)
-            return dict(loss=loss)
+            # NLL gaussiano: 0.5 * (log_var + (y-mu)^2 / var), media sobre todo
+            nll = 0.5 * (log_var + (obj_future_flat - mu) ** 2 * torch.exp(-log_var))
+            return dict(loss=nll.mean())
+        elif mode == 'uncertainty':
+            return mu, log_var                                       # para inspección
         else:
-            return pred_flat
+            return mu                                                # predict -> media (compat)
