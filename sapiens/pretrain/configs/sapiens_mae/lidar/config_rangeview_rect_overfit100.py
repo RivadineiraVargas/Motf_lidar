@@ -79,8 +79,9 @@ optim_wrapper = dict(
     optimizer=dict(type='AdamW', lr=1.5e-4, betas=(0.9, 0.95), weight_decay=0.05),
     clip_grad=dict(max_norm=1.0))
 
-# 1000 ep x 25 iters = 25k iters (~12h GPU a batch 4). Checkpoints c/100 ep.
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=1000)
+# 1000 ep: loss 2.07->0.39 sin meseta; val 0.79 / unseen 3.16 ya mejores que el
+# modelo de 10 sweeps (0.99 / 3.39) -> extendido a 3000 para seguir bajando.
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=3000)
 default_hooks = dict(checkpoint=dict(interval=100, max_keep_ckpts=2),
                      logger=dict(interval=25))
 randomness = dict(seed=0)
