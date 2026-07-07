@@ -34,6 +34,25 @@ train_dataloader = dict(
     ),
 )
 
+# test_dataloader: requerido por MAEInferencer para la viz de reconstrucción
+test_pipeline = [
+    dict(type='LoadImageFromFile'),
+    dict(type='Resize', scale=(img_size, img_size), backend='pillow', interpolation='bicubic'),
+    dict(type='PackInputs'),
+]
+test_dataloader = dict(
+    batch_size=1,
+    num_workers=2,
+    sampler=dict(type='DefaultSampler', shuffle=False),
+    collate_fn=dict(type='default_collate'),
+    dataset=dict(
+        type='CustomDataset',
+        data_root='/home/lcad/lidar_sweep_viewer/waymo_clean/range_png',
+        with_label=False,
+        pipeline=test_pipeline,
+    ),
+)
+
 model = dict(
     type='MAE',
     backbone=dict(

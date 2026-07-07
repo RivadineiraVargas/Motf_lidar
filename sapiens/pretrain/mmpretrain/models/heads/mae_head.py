@@ -4,6 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import Optional
+
 import torch
 from mmengine.model import BaseModule
 
@@ -24,10 +26,20 @@ class MAEPretrainHead(BaseModule):
     def __init__(self,
                  loss: dict,
                  norm_pix: bool = False,
-                 patch_size: int = 16) -> None:
+                 patch_size: int = 16,
+                 patch_height: Optional[int] = None,
+                 patch_width: Optional[int] = None,
+                 img_height: Optional[int] = None,
+                 img_width: Optional[int] = None) -> None:
         super().__init__()
         self.norm_pix = norm_pix
         self.patch_size = patch_size
+        # Soporte rectangular (estilo colega): si se dan patch_height/width
+        # se usan; si no, se cae a un patch cuadrado patch_size x patch_size.
+        self.patch_height = patch_height if patch_height is not None else patch_size
+        self.patch_width = patch_width if patch_width is not None else patch_size
+        self.img_height = img_height
+        self.img_width = img_width
         self.loss_module = MODELS.build(loss)
 
     def patchify(self, imgs: torch.Tensor) -> torch.Tensor:
@@ -39,15 +51,16 @@ class MAEPretrainHead(BaseModule):
 
         Returns:
             torch.Tensor: Patchified images. The shape is
-            :math:`(B, L, \text{patch_size}^2 \times 3)`.
+            :math:`(B, L, ph \times pw \times 3)`.
         """
-        p = self.patch_size
-        assert imgs.shape[2] == imgs.shape[3] and imgs.shape[2] % p == 0
+        ph, pw = self.patch_height, self.patch_width
+        H, W = imgs.shape[2], imgs.shape[3]
+        assert H % ph == 0 and W % pw == 0
 
-        h = w = imgs.shape[2] // p
-        x = imgs.reshape(shape=(imgs.shape[0], 3, h, p, w, p))
+        h, w = H // ph, W // pw
+        x = imgs.reshape(shape=(imgs.shape[0], 3, h, ph, w, pw))
         x = torch.einsum('nchpwq->nhwpqc', x)
-        x = x.reshape(shape=(imgs.shape[0], h * w, p**2 * 3))
+        x = x.reshape(shape=(imgs.shape[0], h * w, ph * pw * 3))
         return x
 
     def unpatchify(self, x: torch.Tensor) -> torch.Tensor:
@@ -55,18 +68,22 @@ class MAEPretrainHead(BaseModule):
 
         Args:
             x (torch.Tensor): The shape is
-                :math:`(B, L, \text{patch_size}^2 \times 3)`.
+                :math:`(B, L, ph \times pw \times 3)`.
 
         Returns:
             torch.Tensor: The shape is :math:`(B, 3, H, W)`.
         """
-        p = self.patch_size
-        h = w = int(x.shape[1]**.5)
+        ph, pw = self.patch_height, self.patch_width
+        if self.img_height is not None and self.img_width is not None:
+            h, w = self.img_height // ph, self.img_width // pw
+        else:
+            # cuadrado: deducir grid de L
+            h = w = int(x.shape[1]**.5)
         assert h * w == x.shape[1]
 
-        x = x.reshape(shape=(x.shape[0], h, w, p, p, 3))
+        x = x.reshape(shape=(x.shape[0], h, w, ph, pw, 3))
         x = torch.einsum('nhwpqc->nchpwq', x)
-        imgs = x.reshape(shape=(x.shape[0], 3, h * p, h * p))
+        imgs = x.reshape(shape=(x.shape[0], 3, h * ph, w * pw))
         return imgs
 
     def construct_target(self, target: torch.Tensor) -> torch.Tensor:

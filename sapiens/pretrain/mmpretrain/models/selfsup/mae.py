@@ -58,8 +58,11 @@ class MAEViT(VisionTransformer):
     def init_weights(self) -> None:
         """Initialize position embedding, patch embedding and cls token."""
         super().init_weights()
+        # Usar el grid REAL de patches (h, w) en vez de sqrt(num_patches),
+        # para soportar imágenes/patches rectangulares (estilo colega). Para
+        # imágenes cuadradas el resultado es idéntico al anterior.
         pos_embed = build_2d_sincos_position_embedding(
-            int(self.num_patches**.5),
+            self.patch_resolution,
             self.pos_embed.shape[-1],
             cls_token=True)
         self.pos_embed.data.copy_(pos_embed.float())
@@ -263,7 +266,9 @@ class MAE(BaseSelfSupervisor):
                    optim_wrapper: OptimWrapper) -> Dict[str, torch.Tensor]:
         with optim_wrapper.optim_context(self):
             data = self.data_preprocessor(data, True)
-            losses_dict, preds, masks = self._run_forward(data, mode='loss')
+            # loss() returns only the losses dict; (pred, mask) for visualization
+            # are stashed in self._vis_data and consumed by the vis hook.
+            losses_dict = self._run_forward(data, mode='loss')
         parsed_losses, log_vars = self.parse_losses(losses_dict)
         optim_wrapper.update_params(parsed_losses)
         return log_vars

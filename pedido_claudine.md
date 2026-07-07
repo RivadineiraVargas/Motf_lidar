@@ -263,3 +263,4 @@ Só devemos avançar para o treinamento grande depois que os experimentos pequen
 Só devemos avançar para o decoder depois que o encoder estiver suficientemente validado, tanto por métricas quanto por inspeção visual.
 
 O ponto mais urgente agora é sair da fase indefinida do encoder e demonstrar, de forma objetiva, que o treinamento funciona em pequena escala. Precisamos ver a rede aprendendo com 10, 100 e 1.000 sweeps, entender seu comportamento, ajustar a arquitetura e consolidar a visualização. Depois disso, avançaremos para o treinamento em larga escala e, finalmente, para a predição supervisionada de trajetórias com decoder.
+

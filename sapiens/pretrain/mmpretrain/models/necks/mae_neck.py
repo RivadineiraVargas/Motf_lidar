@@ -4,7 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -61,9 +61,13 @@ class MAEPretrainDecoder(BaseModule):
                  mlp_ratio: int = 4,
                  norm_cfg: dict = dict(type='LN', eps=1e-6),
                  predict_feature_dim: Optional[float] = None,
+                 patch_resolution: Optional[Sequence[int]] = None,
                  init_cfg: Optional[Union[List[dict], dict]] = None) -> None:
         super().__init__(init_cfg=init_cfg)
         self.num_patches = num_patches
+        # Grid real de patches (h, w) para pos embed rectangular. Si no se da,
+        # se asume cuadrado (sqrt) -> retrocompatible con configs previas.
+        self.patch_resolution = patch_resolution
 
         # used to convert the dim of features from encoder to the dim
         # compatible with that of decoder
@@ -100,11 +104,13 @@ class MAEPretrainDecoder(BaseModule):
         """Initialize position embedding and mask token of MAE decoder."""
         super().init_weights()
 
+        grid = self.patch_resolution if self.patch_resolution is not None \
+            else int(self.num_patches**.5)
         decoder_pos_embed = build_2d_sincos_position_embedding(
-            int(self.num_patches**.5),
+            grid,
             self.decoder_pos_embed.shape[-1],
             cls_token=True)
-#        self.decoder_pos_embed.data.copy_(decoder_pos_embed.float())
+        self.decoder_pos_embed.data.copy_(decoder_pos_embed.float())
 
         torch.nn.init.normal_(self.mask_token, std=.02)
 
