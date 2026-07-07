@@ -1,13 +1,14 @@
-# config_rangeview_rect_overfit10.py — Estilo COLEGA (rectangular, panorámico)
-# + arquitectura REDUCIDA (Claudine). Range-view 1024x2650, patches 16x25,
-# preservando TODO el ancho azimutal (2650). Overfit en 10 sweeps.
+# config_rangeview_rect_overfit100.py — Paso 2 del protocolo 10/100/1000 (Claudine).
+# Igual que config_rangeview_rect_overfit10 pero con 100 sweeps MULTI-ESCENA
+# (24 escenas, generados por utilities/make_rect_png_100.py; la escena
+# 82f90331a1dfe968 queda EXCLUIDA como test no-visto).
+# batch 4 (a 10 sweeps batch 2 usaba 2.2GB/8GB) -> 25 iters/epoca.
 _base_ = ['../../_base_/default_runtime.py']
 
 img_height = 1024
 img_width = 2650
 patch_height = 16
 patch_width = 25
-# grid de patches: (1024/16, 2650/25) = (64, 106) -> 6784 patches
 grid_h = img_height // patch_height   # 64
 grid_w = img_width // patch_width     # 106
 num_patches = grid_h * grid_w         # 6784
@@ -26,14 +27,14 @@ train_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=2,
+    batch_size=4,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     collate_fn=dict(type='default_collate'),
     dataset=dict(
         type='CustomDataset',
-        data_root='/home/lcad/lidar_sweep_viewer/waymo_clean/range_png_rect',
+        data_root='/home/lcad/lidar_sweep_viewer/waymo_clean/range_png_rect/train100',
         with_label=False,
         pipeline=train_pipeline,
     ),
@@ -78,9 +79,9 @@ optim_wrapper = dict(
     optimizer=dict(type='AdamW', lr=1.5e-4, betas=(0.9, 0.95), weight_decay=0.05),
     clip_grad=dict(max_norm=1.0))
 
-# 2000 ép: loss 2.72 -> 0.197, aún bajando sin meseta -> extendido a 6000
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=6000)
-default_hooks = dict(checkpoint=dict(interval=500, max_keep_ckpts=2),
-                     logger=dict(interval=20))
+# 1000 ep x 25 iters = 25k iters (~12h GPU a batch 4). Checkpoints c/100 ep.
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=1000)
+default_hooks = dict(checkpoint=dict(interval=100, max_keep_ckpts=2),
+                     logger=dict(interval=25))
 randomness = dict(seed=0)
-work_dir = './work_dirs/rv_rect_overfit10'
+work_dir = './work_dirs/rv_rect_overfit100'
