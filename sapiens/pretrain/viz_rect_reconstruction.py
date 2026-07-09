@@ -29,7 +29,8 @@ def to_img(t):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--config', required=True)
-    ap.add_argument('--checkpoint', required=True)
+    ap.add_argument('--checkpoint', default=None,
+                    help='ruta al .pth; "random" = red SIN entrenar (Claudine Sec.5)')
     ap.add_argument('--input', required=True)
     ap.add_argument('--output', default='recon_rect.png')
     ap.add_argument('--seed', type=int, default=0)
@@ -42,9 +43,12 @@ def main():
     torch.manual_seed(args.seed)
     model = MODELS.build(cfg.model)
     model.init_weights()
-    sd = torch.load(args.checkpoint, map_location='cpu')
-    sd = sd.get('state_dict', sd)
-    model.load_state_dict(sd, strict=False)
+    if args.checkpoint and args.checkpoint != 'random':
+        sd = torch.load(args.checkpoint, map_location='cpu')
+        sd = sd.get('state_dict', sd)
+        model.load_state_dict(sd, strict=False)
+    else:
+        print('[AVISO] red SIN entrenar (pesos de inicializacion)')
     model = model.cuda().eval()
 
     # cargar imagen con el MISMO pipeline del entrenamiento (Resize bicubic)
@@ -78,16 +82,22 @@ def main():
     recon_img = unpatch_denorm(recon_patches)[0]
     reconvis_img = unpatch_denorm(recon_vis_patches)[0]
 
-    panels = [to_img(orig_img), to_img(masked_img), to_img(recon_img), to_img(reconvis_img)]
+    # panel de DIFERENCIA (Claudine Sec.5): |original - (recon+visible)|, amplificada
+    # x3 para que el error sea visible; blanco = error grande, negro = sin error.
+    diff = (orig_img - reconvis_img).abs() * 3.0
+    diff_gray = to_img(diff.clamp(0, 255))        # error claro sobre negro
+
+    panels = [to_img(orig_img), to_img(masked_img), to_img(recon_img),
+              to_img(reconvis_img), diff_gray]
     sep = np.full((6, panels[0].shape[1]), 255, np.uint8)    # separador blanco
     stacked = panels[0]
     for p in panels[1:]:
         stacked = np.vstack([stacked, sep, p])
     cv2.imwrite(args.output, stacked)
     # también cada panel suelto
-    for name, p in zip(['original', 'masked', 'recon', 'recon_plus_visible'], panels):
+    for name, p in zip(['original', 'masked', 'recon', 'recon_plus_visible', 'diff'], panels):
         cv2.imwrite(args.output.replace('.png', f'_{name}.png'), p)
-    print(f'[OK] guardado {args.output} (4 paneles: original/enmascarado/recon/recon+visible)')
+    print(f'[OK] guardado {args.output} (5 paneles: original/enmascarado/recon/recon+visible/diff)')
 
 
 if __name__ == '__main__':

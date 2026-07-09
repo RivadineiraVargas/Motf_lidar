@@ -27,9 +27,12 @@ def main():
     cfg = Config.fromfile(args.config)
     cfg.model['data_preprocessor'] = cfg.data_preprocessor
     model = MODELS.build(cfg.model)
-    sd = torch.load(args.checkpoint, map_location='cpu')
-    sd = sd.get('state_dict', sd)
-    model.load_state_dict(sd, strict=False)
+    if args.checkpoint != 'random':
+        sd = torch.load(args.checkpoint, map_location='cpu')
+        sd = sd.get('state_dict', sd)
+        model.load_state_dict(sd, strict=False)
+    else:
+        model.init_weights()
     model = model.cuda().eval()
 
     pipe = Compose(cfg.train_pipeline)
