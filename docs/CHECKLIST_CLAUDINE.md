@@ -18,11 +18,11 @@ excluida como no-visto.
 | 10 | ≥50 mil sweeps | ❌ datos | fase de escala, tras luz verde |
 | 11 | Evaluar en no-visto | ✅ | eval_rect_loss.py: sin entrenar 3.52 / 10sw 3.39 / 100sw 3.16 |
 | 12 | Estudiar Wayformer y relacionados | ✅ | docs/ESTUDIO_WAYFORMER.md (decisiones de diseño para nuestro decoder) |
-| 13 | Representación de trayectorias | 🟡 | decidida (slots K + validez + desplazamientos relativos, ver estudio); falta implementar |
-| 14 | Diseñar decoder | 🟡 | diseño elegido: estilo Wayformer condicionado, k=1 inicial |
-| 15 | Entrenar decoder anotado | 🟡 | hecho con pipeline viejo (voxel/attn, ADE/FDE en docs/RESULTADOS_ADE_FDE.md); falta con encoder MAE nuevo |
-| 16 | Visualizador trayectorias | ✅ | viewer C++ + dashboard + Open3D (fase previa) — se reusa |
-| 17 | Eval sistema completo | 🟡 | ADE/FDE del pipeline viejo; falta con el pipeline nuevo |
+| 13 | Representación de trayectorias | ✅ mini | K=100 slots + flag validez + 16 desplazamientos ego (8s a 2Hz, formato WOMD) — train_decoder_mini.py |
+| 14 | Diseñar decoder | ✅ mini | Wayformer condicionado: 2 bloques TransformerDecoder, cross-attn a tokens del MAE congelado, k=1 |
+| 15 | Entrenar decoder anotado | ✅ mini | overfit escena 2a81 (11 muestras): ADE 0.17m / FDE 0.29m a 8s, validez 100% |
+| 16 | Visualizador trayectorias | ✅ | BEV nuevo (bev_train_t10.png: pred calca GT, giros incl.) + viewer C++/Open3D previos |
+| 17 | Eval sistema completo | ✅ mini | ADE/FDE + acc validez en train Y escena no-vista (ADE ~42m -> sin transferencia con 1 escena, mismo patrón que el encoder) |
 
 ## Comparaciones pedidas (Sec. 6) ya cubiertas por trabajo previo
 - Formas de representar sweeps: voxel vs range-view comparado a 10 escenas
@@ -40,3 +40,12 @@ excluida como no-visto.
 Lecturas: (1) el encoder aprende (56× vs red aleatoria en train); (2) generaliza
 dentro de la escena; (3) para escenas nuevas hacen falta más datos, no más épocas
 (entre ép.1000 y 3000 del run de 100, train mejora 2× pero val/no-visto empeoran).
+
+## Mini-fase 2 (decoder) — hallazgo de datos
+
+`objs_bbox` de waymo_clean tiene los 91 frames de labels (9s completos del WOMD)
+aunque el LiDAR cubra solo 0..10 → el horizonte de 0.5s de la fase vieja era
+autoimpuesto. El decoder mini ya predice el formato WOMD real: 8s de futuro
+(16 waypoints a 2Hz) desde el sweep actual. Trampas del fork documentadas en
+train_decoder_mini.py: `MAEViT.eval()` retorna None; `mask=False` se ignora
+(usar `mask_ratio=0` para extraer features sin máscara).
