@@ -1,0 +1,132 @@
+"""
+export_decoder_mini_global.py — Lleva las predicciones del decoder mini al
+"simulador": (1) exporta predictions_global.txt para el viewer C++
+(show_point_cloud, dashboard rangeview+BEV, tecla 't'); (2) genera un video
+GIF por escena con range-view arriba y BEV abajo (puntos LiDAR + GT verde +
+pred rojo), un frame por sweep t=0..10.
+
+Formato txt (igual a export_predictions_global.py):
+    <scene> <obj_id> <kind> <t> <x> <y> <z>   kind: 0=hist 1=GT 2=pred (GLOBAL)
+
+Uso:
+  conda run -n sapiens_gpu python export_decoder_mini_global.py \
+      [--scenes 2a81f5233075e987 82f90331a1dfe968] [--out work_dirs/decoder_mini]
+"""
+import argparse, os
+import numpy as np
+import torch
+import cv2
+from mmengine.config import Config
+from mmengine.registry import init_default_scope
+from mmpretrain.registry import MODELS
+from train_decoder_mini import (ROOT, CFG, CKPT, MAXR, SCALE, WP_STEP, N_WP,
+                                MiniWayformerDecoder, build_sample,
+                                encode_sweeps, center_of)
+
+BEV_M = 75.0        # semiancho del BEV (m)
+BEV_PX = 900        # tamaño del BEV en px
+
+
+def load_pose(scene, t):
+    return np.loadtxt(f'{ROOT}/poses/{scene}/{t}.txt')
+
+
+def bev_xy(p):
+    s = BEV_PX / (2 * BEV_M)
+    return int((p[0] + BEV_M) * s), int((BEV_M - p[1]) * s)
+
+
+def draw_poly(img, pts, color, thick=2):
+    pts = [bev_xy(p) for p in pts]
+    for a, b in zip(pts[:-1], pts[1:]):
+        cv2.line(img, a, b, color, thick)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--scenes', nargs='+',
+                    default=['2a81f5233075e987', '82f90331a1dfe968'])
+    ap.add_argument('--out', default='work_dirs/decoder_mini')
+    ap.add_argument('--txt', default='/home/lcad/lidar_sweep_viewer/predictions_global.txt')
+    args = ap.parse_args()
+    dev = 'cuda'
+
+    init_default_scope('mmpretrain')
+    cfg = Config.fromfile(CFG)
+    mae = MODELS.build({**cfg.model, 'data_preprocessor': cfg.data_preprocessor})
+    mae.load_state_dict(torch.load(CKPT, map_location='cpu').get('state_dict'),
+                        strict=False)
+    encoder = mae.backbone.to(dev)
+    encoder.eval()
+    model = MiniWayformerDecoder().to(dev)
+    model.load_state_dict(torch.load(f'{args.out}/decoder_mini.pth',
+                                     map_location=dev))
+    model.eval()
+
+    lines = []
+    for scene in args.scenes:
+        lat = encode_sweeps(encoder, scene, range(11), dev)
+        frames = []
+        for t in range(11):
+            s = build_sample(scene, t)
+            if s['n'] == 0:
+                continue
+            with torch.no_grad():
+                traj, _ = model(lat[t], (s['cur'] / SCALE).to(dev), s['n'])
+            pred = (traj[0, :s['n']] * SCALE).cpu().numpy()      # (n,16,2) ego disp
+            pose = load_pose(scene, t)                            # ego -> global
+            to_glob = lambda p2: (pose @ np.array([p2[0], p2[1], 0, 1]))[:3]
+
+            # --- txt para el viewer C++ ---
+            for i, tid in enumerate(s['ids']):
+                c = s['cur'][i].numpy(); m = s['wpm'][i].numpy() > 0
+                # hist desde labels pasados (t-5k), si existen
+                for k in range(2, 0, -1):
+                    fh = f'{ROOT}/objs_bbox/{scene}/{t - k * WP_STEP}/{tid}.txt'
+                    if t - k * WP_STEP >= 0 and os.path.exists(fh):
+                        g = center_of(fh)
+                        lines.append(f'{scene} {tid} 0 {k} {g[0]:.4f} {g[1]:.4f} {g[2]:.4f}')
+                for k in np.where(m)[0]:
+                    g = to_glob(c + s['gt'][i].numpy()[k])
+                    lines.append(f'{scene} {tid} 1 {k} {g[0]:.4f} {g[1]:.4f} {g[2]:.4f}')
+                    g = to_glob(c + pred[i][k])
+                    lines.append(f'{scene} {tid} 2 {k} {g[0]:.4f} {g[1]:.4f} {g[2]:.4f}')
+
+            # --- frame del video: rangeview arriba + BEV abajo ---
+            r = np.load(f'{ROOT}/range_files/{scene}/{t}.npy')[..., 0]
+            u = np.clip(255 * (1 - r / MAXR), 0, 255).astype(np.uint8)
+            u[r <= 0] = 0
+            rv = cv2.resize(u, (BEV_PX, 256), interpolation=cv2.INTER_NEAREST)
+            rv = cv2.cvtColor(rv, cv2.COLOR_GRAY2BGR)
+
+            bev = np.zeros((BEV_PX, BEV_PX, 3), np.uint8)
+            pts = np.fromfile(f'{ROOT}/bin_files/{scene}/{t}.bin',
+                              dtype=np.float32).reshape(-1, 4)[:, :2]
+            keep = (np.abs(pts[:, 0]) < BEV_M) & (np.abs(pts[:, 1]) < BEV_M)
+            for p in pts[keep][::4]:
+                bev[bev_xy(p)[1], bev_xy(p)[0]] = (255, 255, 255)
+            for i in range(s['n']):
+                c = s['cur'][i].numpy(); m = s['wpm'][i].numpy() > 0
+                cv2.circle(bev, bev_xy(c), 4, (255, 255, 0), -1)          # actual cian
+                draw_poly(bev, [c] + list(c + s['gt'][i].numpy()[m]), (0, 255, 0))
+                draw_poly(bev, [c] + list(c + pred[i][m]), (0, 0, 255))
+            cv2.putText(bev, f'{scene[:8]}  t={t}  GT verde / pred rojo',
+                        (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
+            frames.append(np.vstack([rv, bev]))
+
+        gif = f'{args.out}/sim_{scene[:8]}.gif'
+        from PIL import Image
+        Image.fromarray(cv2.cvtColor(frames[0], cv2.COLOR_BGR2RGB)).save(
+            gif, save_all=True, duration=500, loop=0,
+            append_images=[Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
+                           for f in frames[1:]])
+        print(f'[OK] {gif} ({len(frames)} frames)')
+
+    with open(args.txt, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+    print(f'[OK] {args.txt} ({len(lines)} puntos) — viewer C++: '
+          f'./show_point_cloud --input waymo_clean  (tecla t)')
+
+
+if __name__ == '__main__':
+    main()

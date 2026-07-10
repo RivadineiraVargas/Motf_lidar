@@ -63,7 +63,7 @@ def build_sample(scene, t):
     """Objetos en frame t + futuros -> dict con pos actuales (ego_t), gt, máscaras."""
     inv = load_pose_inv(scene, t)
     to_ego = lambda p: (inv @ np.append(p, 1.0))[:2]
-    cur, gt, wpm = [], [], []
+    cur, gt, wpm, ids = [], [], [], []
     for f in sorted(glob.glob(f'{ROOT}/objs_bbox/{scene}/{t}/*.txt')):
         tid = os.path.basename(f)[:-4]
         c0 = to_ego(center_of(f))
@@ -78,8 +78,9 @@ def build_sample(scene, t):
         if sum(mask) == 0:
             continue                                     # sin futuro: se omite
         cur.append(c0); gt.append(np.array(wps)); wpm.append(np.array(mask))
+        ids.append(tid)
     n = min(len(cur), K_SLOTS)
-    return dict(n=n,
+    return dict(n=n, ids=ids[:n],
                 cur=torch.tensor(np.array(cur[:n]), dtype=torch.float32),
                 gt=torch.tensor(np.array(gt[:n]), dtype=torch.float32),
                 wpm=torch.tensor(np.array(wpm[:n]), dtype=torch.float32))
