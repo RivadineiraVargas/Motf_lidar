@@ -86,6 +86,26 @@ def build_sample(scene, t):
                 wpm=torch.tensor(np.array(wpm[:n]), dtype=torch.float32))
 
 
+class MiniBaseline(nn.Module):
+    """Referencia SIN escena: MLP por slot sobre la posición actual. Misma
+    interfaz (mem se ignora) para comparar modelos (Claudine Sec.11)."""
+
+    def __init__(self, d=192):
+        super().__init__()
+        self.q_proj = nn.Sequential(nn.Linear(2, d), nn.ReLU(), nn.Linear(d, d))
+        self.empty = nn.Parameter(torch.zeros(1, 1, d))
+        self.mlp = nn.Sequential(nn.Linear(d, d), nn.ReLU(), nn.Linear(d, d), nn.ReLU())
+        self.head_traj = nn.Linear(d, N_WP * 2)
+        self.head_valid = nn.Linear(d, 1)
+
+    def forward(self, mem, cur, n):
+        q = self.q_proj(cur.unsqueeze(0))
+        q = torch.cat([q, self.empty.expand(1, K_SLOTS - n, -1)], dim=1)
+        h = self.mlp(q)
+        return (self.head_traj(h).view(1, K_SLOTS, N_WP, 2),
+                self.head_valid(h).squeeze(-1))
+
+
 class MiniWayformerDecoder(nn.Module):
     def __init__(self, enc_dim=384, d=192, heads=4, layers=2):
         super().__init__()
@@ -145,6 +165,7 @@ def main():
     ap.add_argument('--unseen', default='82f90331a1dfe968')
     ap.add_argument('--epochs', type=int, default=500)
     ap.add_argument('--lr', type=float, default=1e-3)
+    ap.add_argument('--arch', choices=['wayformer', 'baseline'], default='wayformer')
     ap.add_argument('--out', default='work_dirs/decoder_mini')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -174,7 +195,8 @@ def main():
     print(f'train: {len(train_set)} muestras, objetos medios '
           f'{np.mean([s["n"] for _, s in train_set]):.1f}; unseen n={s_u["n"]}')
 
-    model = MiniWayformerDecoder().to(dev)
+    model = (MiniWayformerDecoder() if args.arch == 'wayformer'
+             else MiniBaseline()).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     huber = nn.SmoothL1Loss(reduction='none')
     bce = nn.BCEWithLogitsLoss()
@@ -204,7 +226,8 @@ def main():
                   f'train ADE {tr[0]:.2f} FDE {tr[1]:.2f} acc {tr[2]:.2f} | '
                   f'UNSEEN ADE {un[0]:.2f} FDE {un[1]:.2f} acc {un[2]:.2f}')
 
-    torch.save(model.state_dict(), f'{args.out}/decoder_mini.pth')
+    suffix = '' if args.arch == 'wayformer' else f'_{args.arch}'
+    torch.save(model.state_dict(), f'{args.out}/decoder_mini{suffix}.pth')
     # viz BEV: GT verde, pred rojo, posición actual azul (train t=10 y unseen)
     import matplotlib
     matplotlib.use('Agg')

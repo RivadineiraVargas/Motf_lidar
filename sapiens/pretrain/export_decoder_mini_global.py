@@ -20,8 +20,8 @@ from mmengine.config import Config
 from mmengine.registry import init_default_scope
 from mmpretrain.registry import MODELS
 from train_decoder_mini import (ROOT, CFG, CKPT, MAXR, SCALE, WP_STEP, N_WP,
-                                MiniWayformerDecoder, build_sample,
-                                encode_sweeps, center_of)
+                                MiniWayformerDecoder, MiniBaseline,
+                                build_sample, encode_sweeps, center_of)
 
 BEV_M = 75.0        # semiancho del BEV (m)
 BEV_PX = 900        # tamaño del BEV en px
@@ -33,7 +33,11 @@ def load_pose(scene, t):
 
 def bev_xy(p):
     s = BEV_PX / (2 * BEV_M)
-    return int((p[0] + BEV_M) * s), int((BEV_M - p[1]) * s)
+    # clamp: coords enormes (objetos/preds fuera de rango) desbordan los int
+    # de OpenCV y dibujan bandas sólidas
+    px = max(-BEV_PX, min(2 * BEV_PX, (p[0] + BEV_M) * s))
+    py = max(-BEV_PX, min(2 * BEV_PX, (BEV_M - p[1]) * s))
+    return int(px), int(py)
 
 
 def draw_poly(img, pts, color, thick=2):
@@ -62,6 +66,12 @@ def main():
     model.load_state_dict(torch.load(f'{args.out}/decoder_mini.pth',
                                      map_location=dev))
     model.eval()
+    base = None
+    bpath = f'{args.out}/decoder_mini_baseline.pth'
+    if os.path.exists(bpath):
+        base = MiniBaseline().to(dev)
+        base.load_state_dict(torch.load(bpath, map_location=dev))
+        base.eval()
 
     lines = []
     for scene in args.scenes:
@@ -72,8 +82,13 @@ def main():
             if s['n'] == 0:
                 continue
             with torch.no_grad():
-                traj, _ = model(lat[t], (s['cur'] / SCALE).to(dev), s['n'])
+                traj, vlog = model(lat[t], (s['cur'] / SCALE).to(dev), s['n'])
+                pred_b = None
+                if base is not None:
+                    traj_b, _ = base(lat[t], (s['cur'] / SCALE).to(dev), s['n'])
+                    pred_b = (traj_b[0, :s['n']] * SCALE).cpu().numpy()
             pred = (traj[0, :s['n']] * SCALE).cpu().numpy()      # (n,16,2) ego disp
+            validez = (torch.sigmoid(vlog[0, :s['n']]) > 0.5).cpu().numpy()
             pose = load_pose(scene, t)                            # ego -> global
             to_glob = lambda p2: (pose @ np.array([p2[0], p2[1], 0, 1]))[:3]
 
@@ -107,20 +122,36 @@ def main():
                 bev[bev_xy(p)[1], bev_xy(p)[0]] = (255, 255, 255)
             for i in range(s['n']):
                 c = s['cur'][i].numpy(); m = s['wpm'][i].numpy() > 0
-                cv2.circle(bev, bev_xy(c), 4, (255, 255, 0), -1)          # actual cian
-                draw_poly(bev, [c] + list(c + s['gt'][i].numpy()[m]), (0, 255, 0))
-                draw_poly(bev, [c] + list(c + pred[i][m]), (0, 0, 255))
-            cv2.putText(bev, f'{scene[:8]}  t={t}  GT verde / pred rojo',
-                        (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
+                gt_abs = c + s['gt'][i].numpy()
+                pr_abs = c + pred[i]
+                # errores explícitos: segmento amarillo pred_k -> GT_k
+                for k in np.where(m)[0]:
+                    cv2.line(bev, bev_xy(pr_abs[k]), bev_xy(gt_abs[k]),
+                             (0, 255, 255), 1)
+                if pred_b is not None:                            # baseline naranja
+                    draw_poly(bev, [c] + list(c + pred_b[i][m]), (0, 140, 255), 1)
+                draw_poly(bev, [c] + list(gt_abs[m]), (0, 255, 0))
+                draw_poly(bev, [c] + list(pr_abs[m]), (0, 0, 255))
+                # validez predicha: cian lleno = valida; magenta anillo = invalida
+                if validez[i]:
+                    cv2.circle(bev, bev_xy(c), 4, (255, 255, 0), -1)
+                else:
+                    cv2.circle(bev, bev_xy(c), 6, (255, 0, 255), 2)
+            cv2.putText(bev, f'{scene[:8]} t={t} GT verde/Wayformer rojo/'
+                        f'baseline naranja/error amarillo/valida cian',
+                        (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
             frames.append(np.vstack([rv, bev]))
 
         gif = f'{args.out}/sim_{scene[:8]}.gif'
         from PIL import Image
-        Image.fromarray(cv2.cvtColor(frames[0], cv2.COLOR_BGR2RGB)).save(
-            gif, save_all=True, duration=500, loop=0,
-            append_images=[Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
-                           for f in frames[1:]])
-        print(f'[OK] {gif} ({len(frames)} frames)')
+        pil = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)).quantize(64)
+               for f in frames]
+        # disposal=2 + optimize=False: la paleta optimizada de PIL corrompe
+        # los últimos frames (bandas de color falsas)
+        pil[0].save(gif, save_all=True, duration=500, loop=0,
+                    append_images=pil[1:], disposal=2, optimize=False)
+        cv2.imwrite(f'{args.out}/sim_{scene[:8]}_t10.png', frames[-1])
+        print(f'[OK] {gif} ({len(frames)} frames) + _t10.png')
 
     with open(args.txt, 'w') as f:
         f.write('\n'.join(lines) + '\n')

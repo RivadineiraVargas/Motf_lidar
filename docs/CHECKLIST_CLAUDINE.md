@@ -21,7 +21,7 @@ excluida como no-visto.
 | 13 | Representación de trayectorias | ✅ mini | K=100 slots + flag validez + 16 desplazamientos ego (8s a 2Hz, formato WOMD) — train_decoder_mini.py |
 | 14 | Diseñar decoder | ✅ mini | Wayformer condicionado: 2 bloques TransformerDecoder, cross-attn a tokens del MAE congelado, k=1 |
 | 15 | Entrenar decoder anotado | ✅ mini | overfit escena 2a81 (11 muestras): ADE 0.17m / FDE 0.29m a 8s, validez 100% |
-| 16 | Visualizador trayectorias | ✅ | BEV nuevo (bev_train_t10.png: pred calca GT, giros incl.) + viewer C++/Open3D previos |
+| 16 | Visualizador trayectorias | ✅ | Simulador rangeview+BEV (sim_*.gif + viewer C++ con predictions_global.txt NUEVO). Sec.11 completa: sweeps ✅ objetos ✅ GT ✅ pred ✅ validez (cian/magenta) ✅ error explícito (amarillo) ✅ comparación de modelos (Wayformer rojo vs baseline-sin-escena naranja) ✅ |
 | 17 | Eval sistema completo | ✅ mini | ADE/FDE + acc validez en train Y escena no-vista (ADE ~42m -> sin transferencia con 1 escena, mismo patrón que el encoder) |
 
 ## Comparaciones pedidas (Sec. 6) ya cubiertas por trabajo previo
@@ -40,6 +40,17 @@ excluida como no-visto.
 Lecturas: (1) el encoder aprende (56× vs red aleatoria en train); (2) generaliza
 dentro de la escena; (3) para escenas nuevas hacen falta más datos, no más épocas
 (entre ép.1000 y 3000 del run de 100, train mejora 2× pero val/no-visto empeoran).
+
+## Comparación de modelos (Sec. 11) — decoder mini, escena 2a81, 8s
+
+| Modelo | train ADE/FDE (m) | no-visto ADE/FDE (m) |
+|---|---|---|
+| Wayformer condicionado (con escena MAE) | **0.17 / 0.29** | 42.0 / 61.9 |
+| Baseline sin escena (MLP posición actual) | 0.31 / 0.50 | 41.8 / 61.7 |
+
+El decoder con escena memoriza ~1.8× mejor; en no-visto empatan (~42m) →
+a escala 1 escena la comparación valida el pipeline, no la hipótesis "escena
+ayuda a generalizar" (eso requiere multi-escena, igual que el encoder).
 
 ## Mini-fase 2 (decoder) — hallazgo de datos
 
