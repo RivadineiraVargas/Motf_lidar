@@ -41,6 +41,24 @@ Lecturas: (1) el encoder aprende (56× vs red aleatoria en train); (2) generaliz
 dentro de la escena; (3) para escenas nuevas hacen falta más datos, no más épocas
 (entre ép.1000 y 3000 del run de 100, train mejora 2× pero val/no-visto empeoran).
 
+## Configuraciones de entrada (Sec. 1) — historia de k sweeps, decoder mini
+
+| k sweeps | train ADE/FDE (m) | no-visto ADE/FDE (m) |
+|---|---|---|
+| 1 (solo actual) | 0.17 / 0.29 | 42.0 / 61.9 |
+| 3 | 0.15 / 0.23 | 42.3 / 62.3 |
+| 5 | 0.14 / 0.27 | 41.8 / 61.1 |
+
+Implementación: `--hist k` en train_decoder_mini.py (k latents del MAE con
+embedding temporal aprendido, concatenados como memoria de cross-attn).
+Lectura honesta: a escala 1 escena la historia NO cambia el no-visto (~42m
+en todos) — con memorización total, más entrada no aporta; el valor real de
+la ventana temporal se testea en multi-escena.
+
+NOTA métricas: el ADE de train está deflactado por objetos estacionados
+(33/49 se mueven <1m en 8s; mediana de desplazamiento 0.0m). Solo objetos
+en movimiento (n=16): ADE 0.23m (k=1). Recomputado de forma independiente.
+
 ## Comparación de modelos (Sec. 11) — decoder mini, escena 2a81, 8s
 
 | Modelo | train ADE/FDE (m) | no-visto ADE/FDE (m) |

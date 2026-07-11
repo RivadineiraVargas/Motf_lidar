@@ -107,11 +107,14 @@ class MiniBaseline(nn.Module):
 
 
 class MiniWayformerDecoder(nn.Module):
-    def __init__(self, enc_dim=384, d=192, heads=4, layers=2):
+    def __init__(self, enc_dim=384, d=192, heads=4, layers=2, max_hist=8):
         super().__init__()
         self.q_proj = nn.Sequential(nn.Linear(2, d), nn.ReLU(), nn.Linear(d, d))
         self.empty = nn.Parameter(torch.zeros(1, 1, d))
         self.mem_proj = nn.Linear(enc_dim, d)
+        # embedding temporal por sweep de historia (Sec.1 Claudine: entrada
+        # multi-sweep); indice 0 = sweep actual, 1 = anterior, etc.
+        self.t_emb = nn.Parameter(torch.zeros(max_hist, d))
         layer = nn.TransformerDecoderLayer(d_model=d, nhead=heads,
                                            dim_feedforward=4 * d, batch_first=True)
         self.dec = nn.TransformerDecoder(layer, num_layers=layers)
@@ -119,11 +122,16 @@ class MiniWayformerDecoder(nn.Module):
         self.head_valid = nn.Linear(d, 1)
 
     def forward(self, mem, cur, n):
-        """mem (1,L,enc_dim); cur (n,2) ego/SCALE; n objetos reales."""
+        """mem: tensor (1,L,enc_dim) o lista [actual, t-1, ...]; cur (n,2)
+        ego/SCALE; n objetos reales."""
+        if not isinstance(mem, (list, tuple)):
+            mem = [mem]
+        mems = [self.mem_proj(m) + self.t_emb[i] for i, m in enumerate(mem)]
+        mem = torch.cat(mems, dim=1)                             # (1,k*L,d)
         q = self.q_proj(cur.unsqueeze(0))                        # (1,n,d)
         pad = self.empty.expand(1, K_SLOTS - n, -1)
         q = torch.cat([q, pad], dim=1)                           # (1,K,d)
-        h = self.dec(q, self.mem_proj(mem))                      # (1,K,d)
+        h = self.dec(q, mem)                                     # (1,K,d)
         traj = self.head_traj(h).view(1, K_SLOTS, N_WP, 2)
         valid = self.head_valid(h).squeeze(-1)                   # (1,K)
         return traj, valid
@@ -166,6 +174,8 @@ def main():
     ap.add_argument('--epochs', type=int, default=500)
     ap.add_argument('--lr', type=float, default=1e-3)
     ap.add_argument('--arch', choices=['wayformer', 'baseline'], default='wayformer')
+    ap.add_argument('--hist', type=int, default=1,
+                    help='k sweeps de historia como entrada (Sec.1 Claudine)')
     ap.add_argument('--out', default='work_dirs/decoder_mini')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -183,15 +193,18 @@ def main():
         p.requires_grad = False
 
     ts = list(range(11))                                         # t=0..10 (hay LiDAR)
+    k = args.hist
+    hist_of = lambda lat, t: [lat[max(t - i, 0)] for i in range(k)]  # clamp en t=0
     train_set = []
     for sc in args.scenes:
         lat = encode_sweeps(encoder, sc, ts, dev)
         for t in ts:
             s = build_sample(sc, t)
             if s['n'] > 0:
-                train_set.append((lat[t], s))
-    lat_u = encode_sweeps(encoder, args.unseen, [10], dev)
+                train_set.append((hist_of(lat, t), s))
+    lat_u = encode_sweeps(encoder, args.unseen, ts, dev)
     s_u = build_sample(args.unseen, 10)
+    mem_u = hist_of(lat_u, 10)
     print(f'train: {len(train_set)} muestras, objetos medios '
           f'{np.mean([s["n"] for _, s in train_set]):.1f}; unseen n={s_u["n"]}')
 
@@ -220,7 +233,7 @@ def main():
             with torch.no_grad():
                 mem, s = train_set[-1]
                 tr = metrics(*model(mem, (s['cur'] / SCALE).to(dev), s['n']), s, dev)
-                un = metrics(*model(lat_u[10], (s_u['cur'] / SCALE).to(dev),
+                un = metrics(*model(mem_u, (s_u["cur"] / SCALE).to(dev),
                                     s_u['n']), s_u, dev)
             print(f'ep {ep:4d} loss {tot/len(train_set):.4f} | '
                   f'train ADE {tr[0]:.2f} FDE {tr[1]:.2f} acc {tr[2]:.2f} | '
@@ -234,7 +247,7 @@ def main():
     import matplotlib.pyplot as plt
     model.eval()
     for name, mem, s in [('train_t10', train_set[-1][0], train_set[-1][1]),
-                         ('unseen_t10', lat_u[10], s_u)]:
+                         ("unseen_t10", mem_u, s_u)]:
         with torch.no_grad():
             traj, valid = model(mem, (s['cur'] / SCALE).to(dev), s['n'])
         pred = (traj[0, :s['n']] * SCALE).cpu().numpy()

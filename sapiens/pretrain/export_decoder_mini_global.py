@@ -52,6 +52,7 @@ def main():
                     default=['2a81f5233075e987', '82f90331a1dfe968'])
     ap.add_argument('--out', default='work_dirs/decoder_mini')
     ap.add_argument('--txt', default='/home/lcad/lidar_sweep_viewer/predictions_global.txt')
+    ap.add_argument('--strip', choices=['compacta', 'rayas'], default='compacta')
     args = ap.parse_args()
     dev = 'cuda'
 
@@ -111,12 +112,16 @@ def main():
             r = np.load(f'{ROOT}/range_files/{scene}/{t}.npy')[..., 0]
             u = np.clip(255 * (1 - r / MAXR), 0, 255).astype(np.uint8)
             u[r < 0] = 0
-            # formato COLEGA (show_rangeview_and_birdview.py): 64 beams -> 1024
-            # filas con nearest (16 filas/beam, las "rayas"), recien despues
-            # escalar proporcional al ancho del GIF
+            # base = formato COLEGA (show_rangeview_and_birdview.py): 64 beams
+            # -> 1024 filas nearest (16 filas/beam). Dos presentaciones:
+            #   rayas    = proporcional 900x348 nearest (fiel al colega)
+            #   compacta = 900x256 INTER_AREA (mas legible, default)
             rv = cv2.resize(u, (2650, 1024), interpolation=cv2.INTER_NEAREST)
-            h = round(1024 * BEV_PX / 2650)
-            rv = cv2.resize(rv, (BEV_PX, h), interpolation=cv2.INTER_NEAREST)
+            if args.strip == 'rayas':
+                h = round(1024 * BEV_PX / 2650)
+                rv = cv2.resize(rv, (BEV_PX, h), interpolation=cv2.INTER_NEAREST)
+            else:
+                rv = cv2.resize(rv, (BEV_PX, 256), interpolation=cv2.INTER_AREA)
             rv = cv2.cvtColor(rv, cv2.COLOR_GRAY2BGR)
 
             bev = np.zeros((BEV_PX, BEV_PX, 3), np.uint8)
