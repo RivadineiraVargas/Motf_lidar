@@ -53,6 +53,8 @@ def main():
     ap.add_argument('--out', default='work_dirs/decoder_mini')
     ap.add_argument('--txt', default='/home/lcad/lidar_sweep_viewer/predictions_global.txt')
     ap.add_argument('--strip', choices=['compacta', 'rayas'], default='compacta')
+    ap.add_argument('--sin-gif', action='store_true',
+                    help='solo exporta el txt (rapido, p/ viewer C++)')
     args = ap.parse_args()
     dev = 'cuda'
 
@@ -64,14 +66,15 @@ def main():
     encoder = mae.backbone.to(dev)
     encoder.eval()
     model = MiniWayformerDecoder().to(dev)
+    # strict=False: checkpoints previos a t_emb (que inicia en 0 = sin efecto)
     model.load_state_dict(torch.load(f'{args.out}/decoder_mini.pth',
-                                     map_location=dev))
+                                     map_location=dev), strict=False)
     model.eval()
     base = None
     bpath = f'{args.out}/decoder_mini_baseline.pth'
     if os.path.exists(bpath):
         base = MiniBaseline().to(dev)
-        base.load_state_dict(torch.load(bpath, map_location=dev))
+        base.load_state_dict(torch.load(bpath, map_location=dev), strict=False)
         base.eval()
 
     lines = []
@@ -109,6 +112,8 @@ def main():
                     lines.append(f'{scene} {tid} 2 {k} {g[0]:.4f} {g[1]:.4f} {g[2]:.4f}')
 
             # --- frame del video: rangeview arriba + BEV abajo ---
+            if args.sin_gif:
+                continue
             r = np.load(f'{ROOT}/range_files/{scene}/{t}.npy')[..., 0]
             u = np.clip(255 * (1 - r / MAXR), 0, 255).astype(np.uint8)
             u[r < 0] = 0
@@ -152,6 +157,8 @@ def main():
                         (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
             frames.append(np.vstack([rv, bev]))
 
+        if args.sin_gif:
+            continue
         gif = f'{args.out}/sim_{scene[:8]}.gif'
         from PIL import Image
         pil = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)).quantize(64)
