@@ -12,7 +12,7 @@ Uso:
   conda run -n sapiens_gpu python export_decoder_mini_global.py \
       [--scenes 2a81f5233075e987 82f90331a1dfe968] [--out work_dirs/decoder_mini]
 """
-import argparse, os
+import argparse, glob, math, os
 import numpy as np
 import torch
 import cv2
@@ -25,6 +25,58 @@ from train_decoder_mini import (ROOT, CFG, CKPT, MAXR, SCALE, WP_STEP, N_WP,
 
 BEV_M = 75.0        # semiancho del BEV (m)
 BEV_PX = 900        # tamaño del BEV en px
+
+# --- Proyección de bboxes a la range view (método de Gabriel, adaptado) ---
+# CALIBRADO contra los puntos LiDAR de los .bin (ver docs/CHECKLIST_CLAUDINE.md):
+#   - azimut ESPEJADO (la fórmula comentada de Gabriel): u = W*(-yaw+pi)/2pi
+#   - inclinaciones por fila NO uniformes, estimadas de los datos y guardadas
+#     en waymo_clean/beam_inclinations.npy (fila 0 = +0.9deg ... fila 63 = -14.8deg)
+#   - error mediano de proyección validado: 0.75-1.5 m en 3 escenas
+# CALIBRABLES por si hace falta re-ajustar:
+LIDAR_Z_OFFSET = 2.0      # altura del sensor sobre el frame de la pose (m)
+AZIMUT_OFFSET_PX = 0      # corrimiento horizontal (px sobre 2650)
+BEAM_INCL = np.load(f'{ROOT}/beam_inclinations.npy')   # (64,) rad, decreciente
+BEAM_INCL_MIN = math.radians(-17.6)   # fallback lineal si no hay tabla
+BEAM_INCL_MAX = math.radians(2.4)
+
+
+def proyectar_a_rangeview(verts_sensor, u_size, v_size):
+    """Proyección yaw->u (espejada) y pitch->fila por tabla de beams."""
+    filas = v_size / 64.0            # la franja puede venir re-escalada de 64
+    pts = []
+    for x, y, z in verts_sensor:
+        yaw = -np.arctan2(y, x)      # ESPEJO (convención de columnas WOMD)
+        u = (int(u_size * ((yaw + np.pi) / (2.0 * np.pi))) + AZIMUT_OFFSET_PX) % u_size
+        zz = z - LIDAR_Z_OFFSET
+        pitch = np.arctan2(zz, np.sqrt(x * x + y * y))
+        fila = int(np.abs(pitch - BEAM_INCL).argmin())
+        v = int((fila + 0.5) * filas)
+        if 0 <= u < u_size and 0 <= v < v_size:
+            pts.append((u, v))
+    return pts
+
+
+def dibujar_bbox_rangeview(rv_color, verts_sensor):
+    """Wireframe verde (12 aristas) como draw_bounding_box3d_range_view."""
+    cx, cy = verts_sensor[0][:2]
+    if np.linalg.norm([cx, cy]) < 7.0:           # ignorar el ego
+        return
+    u_size = rv_color.shape[1]
+    p = proyectar_a_rangeview(verts_sensor, u_size, rv_color.shape[0])
+    if len(p) < 8:                                # proyección incompleta
+        return
+
+    def linea(a, b):
+        # evitar aristas que cruzan la costura del azimut (+-180 grados):
+        # dibujarian una linea a lo ancho de toda la imagen (bug de Gabriel)
+        if abs(a[0] - b[0]) > u_size / 2:
+            return
+        cv2.line(rv_color, a, b, (0, 255, 0), 2)
+
+    for i in range(4):
+        linea(p[i], p[(i + 1) % 4])
+        linea(p[i + 4], p[((i + 1) % 4) + 4])
+        linea(p[i], p[i + 4])
 
 
 def load_pose(scene, t):
@@ -122,12 +174,20 @@ def main():
             #   rayas    = proporcional 900x348 nearest (fiel al colega)
             #   compacta = 900x256 INTER_AREA (mas legible, default)
             rv = cv2.resize(u, (2650, 1024), interpolation=cv2.INTER_NEAREST)
+            rv = cv2.cvtColor(rv, cv2.COLOR_GRAY2BGR)
+            # bboxes proyectados a la range view (método Gabriel), en
+            # resolución nativa 2650x1024, ANTES del resize de la franja
+            inv = np.linalg.inv(pose)
+            for fb in sorted(glob.glob(f'{ROOT}/objs_bbox/{scene}/{t}/*.txt')):
+                verts = np.loadtxt(fb)                            # (8,3) global
+                vh = np.hstack([verts, np.ones((8, 1))])
+                verts_sensor = (inv @ vh.T).T[:, :3]
+                dibujar_bbox_rangeview(rv, verts_sensor)
             if args.strip == 'rayas':
                 h = round(1024 * BEV_PX / 2650)
                 rv = cv2.resize(rv, (BEV_PX, h), interpolation=cv2.INTER_NEAREST)
             else:
                 rv = cv2.resize(rv, (BEV_PX, 256), interpolation=cv2.INTER_AREA)
-            rv = cv2.cvtColor(rv, cv2.COLOR_GRAY2BGR)
 
             bev = np.zeros((BEV_PX, BEV_PX, 3), np.uint8)
             pts = np.fromfile(f'{ROOT}/bin_files/{scene}/{t}.bin',
