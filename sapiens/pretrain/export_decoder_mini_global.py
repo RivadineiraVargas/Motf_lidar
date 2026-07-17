@@ -148,20 +148,24 @@ def main():
             pose = load_pose(scene, t)                            # ego -> global
             to_glob = lambda p2: (pose @ np.array([p2[0], p2[1], 0, 1]))[:3]
 
-            # --- txt para el viewer C++ ---
-            for i, tid in enumerate(s['ids']):
-                c = s['cur'][i].numpy(); m = s['wpm'][i].numpy() > 0
-                # hist desde labels pasados (t-5k), si existen
-                for k in range(2, 0, -1):
-                    fh = f'{ROOT}/objs_bbox/{scene}/{t - k * WP_STEP}/{tid}.txt'
-                    if t - k * WP_STEP >= 0 and os.path.exists(fh):
-                        g = center_of(fh)
-                        lines.append(f'{scene} {tid} 0 {k} {g[0]:.4f} {g[1]:.4f} {g[2]:.4f}')
-                for k in np.where(m)[0]:
-                    g = to_glob(c + s['gt'][i].numpy()[k])
-                    lines.append(f'{scene} {tid} 1 {k} {g[0]:.4f} {g[1]:.4f} {g[2]:.4f}')
-                    g = to_glob(c + pred[i][k])
-                    lines.append(f'{scene} {tid} 2 {k} {g[0]:.4f} {g[1]:.4f} {g[2]:.4f}')
+            # --- txt para el viewer C++, SOLO desde t=10 ---
+            # El viewer conecta todos los puntos de un track ordenados por
+            # waypoint; exportar los 11 sweeps superponia 11 trayectorias por
+            # objeto y dibujaba una "mancha" en vez de una linea.
+            if t == 10:
+                for i, tid in enumerate(s['ids']):
+                    c = s['cur'][i].numpy(); m = s['wpm'][i].numpy() > 0
+                    # hist desde labels pasados (t-5k), si existen
+                    for k in range(2, 0, -1):
+                        fh = f'{ROOT}/objs_bbox/{scene}/{t - k * WP_STEP}/{tid}.txt'
+                        if t - k * WP_STEP >= 0 and os.path.exists(fh):
+                            g = center_of(fh)
+                            lines.append(f'{scene} {tid} 0 {k} {g[0]:.4f} {g[1]:.4f} {g[2]:.4f}')
+                    for k in np.where(m)[0]:
+                        g = to_glob(c + s['gt'][i].numpy()[k])
+                        lines.append(f'{scene} {tid} 1 {k} {g[0]:.4f} {g[1]:.4f} {g[2]:.4f}')
+                        g = to_glob(c + pred[i][k])
+                        lines.append(f'{scene} {tid} 2 {k} {g[0]:.4f} {g[1]:.4f} {g[2]:.4f}')
 
             # --- frame del video: rangeview arriba + BEV abajo ---
             if args.sin_gif:
