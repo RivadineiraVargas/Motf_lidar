@@ -138,12 +138,12 @@ def main():
             if s['n'] == 0:
                 continue
             with torch.no_grad():
-                traj, vlog = model(lat[t], (s['cur'] / SCALE).to(dev), s['n'])
+                traj, vlog = model(lat[t], (s['feat'] / SCALE).to(dev), s['n'])
                 pred_b = None
                 if base is not None:
-                    traj_b, _ = base(lat[t], (s['cur'] / SCALE).to(dev), s['n'])
-                    pred_b = (traj_b[0, :s['n']] * SCALE).cpu().numpy()
-            pred = (traj[0, :s['n']] * SCALE).cpu().numpy()      # (n,16,2) ego disp
+                    traj_b, _ = base(lat[t], (s['feat'] / SCALE).to(dev), s['n'])
+                    pred_b = (s['cv'] + traj_b[0, :s['n']].cpu() * SCALE).numpy()
+            pred = (s['cv'] + traj[0, :s['n']].cpu() * SCALE).numpy()  # cv + residuo
             validez = (torch.sigmoid(vlog[0, :s['n']]) > 0.5).cpu().numpy()
             pose = load_pose(scene, t)                            # ego -> global
             to_glob = lambda p2: (pose @ np.array([p2[0], p2[1], 0, 1]))[:3]

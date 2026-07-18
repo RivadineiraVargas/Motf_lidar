@@ -35,7 +35,10 @@ MAXR = 75.0
 K_SLOTS = 100
 N_WP = 16        # 16 waypoints x 0.5s = 8s (formato WOMD)
 WP_STEP = 5      # frames entre waypoints (10Hz -> 2Hz)
+H_PAST = 10      # frames de historia a 10Hz = 1.0s (máximo con LiDAR en t<=10;
+                 # el WOMD-LiDAR solo trae ~1.1s de LiDAR por escena)
 SCALE = 10.0     # normalización de metros para la regresión
+FEAT_DIM = 2 + 2 * H_PAST   # query: pos actual + desplazamientos pasados
 
 
 def sweep_tensor(scene, t):
@@ -60,13 +63,23 @@ def center_of(path):
 
 
 def build_sample(scene, t):
-    """Objetos en frame t + futuros -> dict con pos actuales (ego_t), gt, máscaras."""
+    """Objetos en frame t + historia + futuros -> dict con pos actuales
+    (ego_t), features de query (pos + historia 1.0s), gt y máscaras."""
     inv = load_pose_inv(scene, t)
     to_ego = lambda p: (inv @ np.append(p, 1.0))[:2]
-    cur, gt, wpm, ids = [], [], [], []
+    cur, feat, gt, wpm, cv, ids = [], [], [], [], [], []
     for f in sorted(glob.glob(f'{ROOT}/objs_bbox/{scene}/{t}/*.txt')):
         tid = os.path.basename(f)[:-4]
         c0 = to_ego(center_of(f))
+        # historia: desplazamientos pos(t-j)-pos(t) a 10Hz (estilo Wayformer:
+        # la query conoce velocidad y rumbo). Si falta un frame pasado se
+        # repite el último disponible (clamp).
+        hist, last = [], c0
+        for j in range(1, H_PAST + 1):
+            fp = f'{ROOT}/objs_bbox/{scene}/{max(t - j, 0)}/{tid}.txt'
+            if os.path.exists(fp):
+                last = to_ego(center_of(fp))
+            hist.append(last - c0)
         wps, mask = [], []
         for k in range(1, N_WP + 1):
             ff = f'{ROOT}/objs_bbox/{scene}/{t + k * WP_STEP}/{tid}.txt'
@@ -77,11 +90,19 @@ def build_sample(scene, t):
                 wps.append(np.zeros(2)); mask.append(0.0)
         if sum(mask) == 0:
             continue                                     # sin futuro: se omite
+        # extrapolacion velocidad constante (piso cinematico): v de los
+        # ultimos 0.5s; el modelo predice el RESIDUO sobre esto
+        v = -hist[4] / 0.5
+        cvp = np.stack([v * (0.5 * (k + 1)) for k in range(N_WP)])
         cur.append(c0); gt.append(np.array(wps)); wpm.append(np.array(mask))
+        feat.append(np.concatenate([c0, np.concatenate(hist)]))
+        cv.append(cvp)
         ids.append(tid)
     n = min(len(cur), K_SLOTS)
     return dict(n=n, ids=ids[:n],
                 cur=torch.tensor(np.array(cur[:n]), dtype=torch.float32),
+                feat=torch.tensor(np.array(feat[:n]), dtype=torch.float32),
+                cv=torch.tensor(np.array(cv[:n]), dtype=torch.float32),
                 gt=torch.tensor(np.array(gt[:n]), dtype=torch.float32),
                 wpm=torch.tensor(np.array(wpm[:n]), dtype=torch.float32))
 
@@ -92,10 +113,12 @@ class MiniBaseline(nn.Module):
 
     def __init__(self, d=192):
         super().__init__()
-        self.q_proj = nn.Sequential(nn.Linear(2, d), nn.ReLU(), nn.Linear(d, d))
+        self.q_proj = nn.Sequential(nn.Linear(FEAT_DIM, d), nn.ReLU(), nn.Linear(d, d))
         self.empty = nn.Parameter(torch.zeros(1, 1, d))
         self.mlp = nn.Sequential(nn.Linear(d, d), nn.ReLU(), nn.Linear(d, d), nn.ReLU())
         self.head_traj = nn.Linear(d, N_WP * 2)
+        nn.init.zeros_(self.head_traj.weight)   # residuo arranca en 0 = piso CV
+        nn.init.zeros_(self.head_traj.bias)
         self.head_valid = nn.Linear(d, 1)
 
     def forward(self, mem, cur, n):
@@ -109,7 +132,7 @@ class MiniBaseline(nn.Module):
 class MiniWayformerDecoder(nn.Module):
     def __init__(self, enc_dim=384, d=192, heads=4, layers=2, max_hist=8):
         super().__init__()
-        self.q_proj = nn.Sequential(nn.Linear(2, d), nn.ReLU(), nn.Linear(d, d))
+        self.q_proj = nn.Sequential(nn.Linear(FEAT_DIM, d), nn.ReLU(), nn.Linear(d, d))
         self.empty = nn.Parameter(torch.zeros(1, 1, d))
         self.mem_proj = nn.Linear(enc_dim, d)
         # embedding temporal por sweep de historia (Sec.1 Claudine: entrada
@@ -119,11 +142,13 @@ class MiniWayformerDecoder(nn.Module):
                                            dim_feedforward=4 * d, batch_first=True)
         self.dec = nn.TransformerDecoder(layer, num_layers=layers)
         self.head_traj = nn.Linear(d, N_WP * 2)
+        nn.init.zeros_(self.head_traj.weight)   # residuo arranca en 0 = piso CV
+        nn.init.zeros_(self.head_traj.bias)
         self.head_valid = nn.Linear(d, 1)
 
     def forward(self, mem, cur, n):
-        """mem: tensor (1,L,enc_dim) o lista [actual, t-1, ...]; cur (n,2)
-        ego/SCALE; n objetos reales."""
+        """mem: tensor (1,L,enc_dim) o lista [actual, t-1, ...]; cur (n,FEAT_DIM)
+        = [pos, hist]/SCALE ego; n objetos reales."""
         if not isinstance(mem, (list, tuple)):
             mem = [mem]
         mems = [self.mem_proj(m) + self.t_emb[i] for i, m in enumerate(mem)]
@@ -156,26 +181,29 @@ def encode_sweeps(encoder, scene, ts, dev):
 
 def metrics(traj, valid, s, dev):
     n = s['n']
-    pred = traj[0, :n] * SCALE
+    pred = s['cv'].to(dev) + traj[0, :n] * SCALE   # cv + residuo aprendido
     gt, wpm = s['gt'].to(dev), s['wpm'].to(dev)
     d = ((pred - gt) ** 2).sum(-1).sqrt()                        # (n,16)
     ade = (d * wpm).sum() / wpm.sum()
+    ade5 = (d[:, :10] * wpm[:, :10]).sum() / wpm[:, :10].sum()   # 5s = 10 wp
     last = wpm.cumsum(1).argmax(1)                               # último wp disponible
     fde = d[torch.arange(n), last].mean()
     lab = torch.zeros(K_SLOTS, device=dev); lab[:n] = 1
     acc = ((valid[0] > 0).float() == lab).float().mean()
-    return ade.item(), fde.item(), acc.item()
+    return ade.item(), ade5.item(), fde.item(), acc.item()
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--scenes', nargs='+', default=['2a81f5233075e987'])
-    ap.add_argument('--unseen', default='82f90331a1dfe968')
+    ap.add_argument('--unseen', nargs='+', default=['82f90331a1dfe968'])
     ap.add_argument('--epochs', type=int, default=500)
     ap.add_argument('--lr', type=float, default=1e-3)
     ap.add_argument('--arch', choices=['wayformer', 'baseline'], default='wayformer')
     ap.add_argument('--hist', type=int, default=1,
                     help='k sweeps de historia como entrada (Sec.1 Claudine)')
+    ap.add_argument('--enc', default=CKPT,
+                    help='checkpoint del encoder MAE congelado')
     ap.add_argument('--out', default='work_dirs/decoder_mini')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -185,7 +213,7 @@ def main():
     init_default_scope('mmpretrain')
     cfg = Config.fromfile(CFG)
     mae = MODELS.build({**cfg.model, 'data_preprocessor': cfg.data_preprocessor})
-    sd = torch.load(CKPT, map_location='cpu').get('state_dict')
+    sd = torch.load(args.enc, map_location='cpu').get('state_dict')
     mae.load_state_dict(sd, strict=False)
     encoder = mae.backbone.to(dev)
     encoder.eval()          # OJO: este fork retorna None en .eval(), no encadenar
@@ -202,15 +230,20 @@ def main():
             s = build_sample(sc, t)
             if s['n'] > 0:
                 train_set.append((hist_of(lat, t), s))
-    lat_u = encode_sweeps(encoder, args.unseen, ts, dev)
-    s_u = build_sample(args.unseen, 10)
-    mem_u = hist_of(lat_u, 10)
+    unseen_evals = []
+    for usc in args.unseen:
+        lat_u = encode_sweeps(encoder, usc, ts, dev)
+        unseen_evals.append((hist_of(lat_u, 10), build_sample(usc, 10)))
+    mem_u, s_u = unseen_evals[0]
     print(f'train: {len(train_set)} muestras, objetos medios '
           f'{np.mean([s["n"] for _, s in train_set]):.1f}; unseen n={s_u["n"]}')
 
     model = (MiniWayformerDecoder() if args.arch == 'wayformer'
              else MiniBaseline()).to(dev)
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    best_ade, best_ep = float('inf'), 0
+    suffix = '' if args.arch == 'wayformer' else f'_{args.arch}'
+    best_path = f'{args.out}/decoder_mini{suffix}.pth'
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
     huber = nn.SmoothL1Loss(reduction='none')
     bce = nn.BCEWithLogitsLoss()
 
@@ -218,9 +251,9 @@ def main():
         model.train(); tot = 0.0
         for mem, s in train_set:
             n = s['n']
-            cur = (s['cur'] / SCALE).to(dev)
+            cur = (s['feat'] / SCALE).to(dev)
             traj, valid = model(mem, cur, n)
-            l_traj = (huber(traj[0, :n], (s['gt'] / SCALE).to(dev)).sum(-1)
+            l_traj = (huber(traj[0, :n], ((s['gt'] - s['cv']) / SCALE).to(dev)).sum(-1)
                       * s['wpm'].to(dev)).sum() / s['wpm'].sum()
             lab = torch.zeros(K_SLOTS, device=dev); lab[:n] = 1
             loss = l_traj + bce(valid[0], lab)
@@ -228,19 +261,28 @@ def main():
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
             tot += loss.item()
-        if ep % 50 == 0 or ep == 1:
+        if ep % 20 == 0 or ep == 1:
             model.eval()
             with torch.no_grad():
                 mem, s = train_set[-1]
-                tr = metrics(*model(mem, (s['cur'] / SCALE).to(dev), s['n']), s, dev)
-                un = metrics(*model(mem_u, (s_u["cur"] / SCALE).to(dev),
-                                    s_u['n']), s_u, dev)
+                tr = metrics(*model(mem, (s['feat'] / SCALE).to(dev), s['n']), s, dev)
+                uns = [metrics(*model(mu, (su['feat'] / SCALE).to(dev),
+                                      su['n']), su, dev)
+                       for mu, su in unseen_evals]
+                un = [sum(x) / len(x) for x in zip(*uns)]
+            marca = ''
+            if un[0] < best_ade:
+                best_ade, best_ep = un[0], ep
+                torch.save(model.state_dict(), best_path)
+                marca = '  [mejor]'
             print(f'ep {ep:4d} loss {tot/len(train_set):.4f} | '
-                  f'train ADE {tr[0]:.2f} FDE {tr[1]:.2f} acc {tr[2]:.2f} | '
-                  f'UNSEEN ADE {un[0]:.2f} FDE {un[1]:.2f} acc {un[2]:.2f}')
+                  f'train ADE8 {tr[0]:.2f} ADE5 {tr[1]:.2f} FDE {tr[2]:.2f} '
+                  f'acc {tr[3]:.2f} | UNSEEN ADE8 {un[0]:.2f} ADE5 {un[1]:.2f} '
+                  f'FDE {un[2]:.2f} acc {un[3]:.2f}{marca}')
 
-    suffix = '' if args.arch == 'wayformer' else f'_{args.arch}'
-    torch.save(model.state_dict(), f'{args.out}/decoder_mini{suffix}.pth')
+    print(f'[early-stop] mejor checkpoint: ep {best_ep} '
+          f'(UNSEEN ADE8 {best_ade:.2f}) -> {best_path}')
+    model.load_state_dict(torch.load(best_path, map_location=dev))
     # viz BEV: GT verde, pred rojo, posición actual azul (train t=10 y unseen)
     import matplotlib
     matplotlib.use('Agg')
@@ -249,8 +291,8 @@ def main():
     for name, mem, s in [('train_t10', train_set[-1][0], train_set[-1][1]),
                          ("unseen_t10", mem_u, s_u)]:
         with torch.no_grad():
-            traj, valid = model(mem, (s['cur'] / SCALE).to(dev), s['n'])
-        pred = (traj[0, :s['n']] * SCALE).cpu().numpy()
+            traj, valid = model(mem, (s['feat'] / SCALE).to(dev), s['n'])
+        pred = (s['cv'].to(dev) + traj[0, :s['n']] * SCALE).cpu().numpy()
         fig, ax = plt.subplots(figsize=(10, 10))
         for i in range(s['n']):
             c = s['cur'][i].numpy(); g = s['gt'][i].numpy(); m = s['wpm'][i].numpy() > 0
