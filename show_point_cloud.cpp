@@ -222,7 +222,11 @@ int main(int argc, char** argv) {
             size_t num_points;
             read_bin_file(bin_file_path.c_str(), num_points, birdview_image, meters, size_in_pixels);
             if (!fs::exists(image_file_path)) {
-                calculate_birdview_image(birdview_image, num_points, meters, size_in_pixels);
+                // read_bin_file JÁ construiu o BEV real; calculate_birdview_image
+                // lia memória sem inicializar (malloc sem fread) e apagava a
+                // imagem -> BEV preto quando não existia cache em images/.
+                // (waymo_10 só funcionava porque o cache já estava gerado.)
+                cv::cvtColor(birdview_image, birdview_image, cv::COLOR_GRAY2BGR);
 
                 if (cv::imwrite(image_file_path, birdview_image)) {
                     std::cout << "Imagem criada com sucesso: " << image_file_path << "\n";
