@@ -268,10 +268,45 @@ def load_frozen_encoder(enc_ckpt, dev):
     return encoder
 
 
+def unfreeze_encoder_tail(encoder, n_blocks=1):
+    """Descongela los últimos n_blocks bloques transformer del encoder MAE
+    (+ la norma final) para fine-tuning parcial junto al decoder. El resto
+    queda congelado -> conserva la representación pre-entrenada, solo
+    permite que las capas finales se adapten a la tarea de trayectorias.
+    Exploración: ¿el problema era el encoder congelado, no el puente?
+    (ver hallazgo 29/07: ni atención cruda ni pooling ayudaron con
+    features 100% congeladas)."""
+    total = len(encoder.layers)
+    assert 0 < n_blocks <= total, f'n_blocks debe estar en (0,{total}]'
+    for i, block in enumerate(encoder.layers):
+        req = i >= total - n_blocks
+        for p in block.parameters():
+            p.requires_grad = req
+    for p in encoder.ln1.parameters():
+        p.requires_grad = True
+    n_trainable = sum(p.numel() for p in encoder.parameters() if p.requires_grad)
+    print(f'[fine-tune] descongelados los últimos {n_blocks}/{total} bloques '
+          f'+ ln1 ({n_trainable:,} params entrenables de '
+          f'{sum(p.numel() for p in encoder.parameters()):,})')
+    return encoder
+
+
+def encode_one_live(encoder, scene, t, dev):
+    """Como encode_sweeps pero UN sweep, SIN @torch.no_grad() (el caller
+    controla el contexto de gradiente) y SIN cache (el encoder cambia
+    entre épocas cuando se está fine-tuneando -> cachear sería usar
+    features obsoletas de una época anterior, un bug silencioso)."""
+    old_ratio = encoder.mask_ratio
+    encoder.mask_ratio = 0.0
+    latent, _, _ = encoder(sweep_tensor(scene, t).to(dev))
+    encoder.mask_ratio = old_ratio
+    return latent.float()
+
+
 def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
                   enc_ckpt=CKPT, out_dir='work_dirs/decoder_mini', seed=0,
                   encoder=None, cache_dir=None, eval_every=20, save_viz=True,
-                  verbose=True, dev='cuda'):
+                  verbose=True, dev='cuda', finetune_encoder_blocks=0, enc_lr=1e-5):
     """Entrena el decoder mini y devuelve (best_ade8, best_ep, history).
     Única fuente de verdad del loop de entrenamiento — usada tanto por el
     CLI (main) como por cross_validate_decoder.py, para que ambos caminos
@@ -279,30 +314,53 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
 
     encoder: si se pasa (ya cargado), se reusa en vez de recargar el
     checkpoint — ahorra I/O cuando se llama muchas veces (validación cruzada).
+
+    finetune_encoder_blocks: si >0, descongela los últimos N bloques del
+    encoder MAE y los entrena junto al decoder (lr propio, más bajo:
+    enc_lr). Fuerza cache_dir=None (el encoder cambia entre épocas; cachear
+    sería servir features obsoletas). Exploración post-29/07: ¿el problema
+    era el encoder 100% congelado, no el diseño del puente?
     """
     os.makedirs(out_dir, exist_ok=True)
     torch.manual_seed(seed)
     if encoder is None:
         encoder = load_frozen_encoder(enc_ckpt, dev)
+    finetuning = finetune_encoder_blocks > 0
+    if finetuning:
+        unfreeze_encoder_tail(encoder, finetune_encoder_blocks)
+        if cache_dir is not None and verbose:
+            print('[fine-tune] cache_dir ignorado (encoder no está congelado)')
+        cache_dir = None
 
     ts = list(range(11))                                         # t=0..10 (hay LiDAR)
     hist_of = lambda lat, t: [lat[max(t - i, 0)] for i in range(hist)]  # clamp t=0
     train_set = []
     for sc in scenes:
-        lat = encode_sweeps(encoder, sc, ts, dev, cache_dir=cache_dir)
+        if not finetuning:
+            lat = encode_sweeps(encoder, sc, ts, dev, cache_dir=cache_dir)
         for t in ts:
             s = build_sample(sc, t)
             if s['n'] > 0:
-                train_set.append((hist_of(lat, t), s))
+                # fine-tuning: guardamos (escena,t) y recodificamos cada
+                # época (con grad); frozen: guardamos el latent ya calculado
+                mem = (sc, t) if finetuning else hist_of(lat, t)
+                train_set.append((mem, s))
     unseen_evals = []
     for usc in unseen:
-        lat_u = encode_sweeps(encoder, usc, ts, dev, cache_dir=cache_dir)
-        unseen_evals.append((hist_of(lat_u, 10), build_sample(usc, 10)))
+        if not finetuning:
+            lat_u = encode_sweeps(encoder, usc, ts, dev, cache_dir=cache_dir)
+        mem_u_entry = (usc, 10) if finetuning else hist_of(lat_u, 10)
+        unseen_evals.append((mem_u_entry, build_sample(usc, 10)))
     mem_u, s_u = unseen_evals[0]
     if verbose:
         print(f'train: {len(train_set)} muestras, objetos medios '
               f'{np.mean([s["n"] for _, s in train_set]):.1f}; '
               f'unseen escenas={len(unseen_evals)}')
+
+    live_mem = lambda sc, t, grad: (
+        [encode_one_live(encoder, sc, max(t - i, 0), dev) for i in range(hist)]
+        if grad else
+        [encode_one_live(encoder, sc, max(t - i, 0), dev).detach() for i in range(hist)])
 
     model = {'wayformer': MiniWayformerDecoder,
              'wayformer_pooled': MiniWayformerPooled,
@@ -311,14 +369,24 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
     suffix = '' if arch == 'wayformer' else f'_{arch}'
     best_path = f'{out_dir}/decoder_mini{suffix}.pth'
     best_metrics = None
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
+    param_groups = [{'params': model.parameters(), 'lr': lr}]
+    if finetuning:
+        enc_params = [p for p in encoder.parameters() if p.requires_grad]
+        param_groups.append({'params': enc_params, 'lr': enc_lr})
+    opt = torch.optim.AdamW(param_groups, weight_decay=1e-2)
     huber = nn.SmoothL1Loss(reduction='none')
     bce = nn.BCEWithLogitsLoss()
 
     for ep in range(1, epochs + 1):
-        model.train(); tot = 0.0
+        model.train()
+        if finetuning:
+            encoder.train()          # OJO fork: retorna None, no encadenar
+        tot = 0.0
         for mem, s in train_set:
             n = s['n']
+            if finetuning:
+                sc, t = mem
+                mem = live_mem(sc, t, grad=True)
             cur = (s['feat'] / SCALE).to(dev)
             traj, valid = model(mem, cur, n)
             l_traj = (huber(traj[0, :n], ((s['gt'] - s['cv']) / SCALE).to(dev)).sum(-1)
@@ -327,16 +395,27 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
             loss = l_traj + bce(valid[0], lab)
             opt.zero_grad(); loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if finetuning:
+                nn.utils.clip_grad_norm_(enc_params, 1.0)
             opt.step()
             tot += loss.item()
         if ep % eval_every == 0 or ep == 1:
             model.eval()
+            if finetuning:
+                encoder.eval()       # OJO fork: retorna None, no encadenar
             with torch.no_grad():
                 mem, s = train_set[-1]
+                if finetuning:
+                    sc, t = mem
+                    mem = live_mem(sc, t, grad=False)
                 tr = metrics(*model(mem, (s['feat'] / SCALE).to(dev), s['n']), s, dev)
-                uns = [metrics(*model(mu, (su['feat'] / SCALE).to(dev),
-                                      su['n']), su, dev)
-                       for mu, su in unseen_evals]
+                uns = []
+                for mu, su in unseen_evals:
+                    if finetuning:
+                        usc, ut = mu
+                        mu = live_mem(usc, ut, grad=False)
+                    uns.append(metrics(*model(mu, (su['feat'] / SCALE).to(dev),
+                                              su['n']), su, dev))
                 un = [sum(x) / len(x) for x in zip(*uns)]
             marca = ''
             if un[0] < best_ade:
@@ -344,6 +423,9 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
                     ade8=un[0], ade5=un[1], fde=un[2], acc=un[3],
                     train_ade8=tr[0])
                 torch.save(model.state_dict(), best_path)
+                if finetuning:
+                    torch.save({k: v for k, v in encoder.state_dict().items()},
+                               f'{out_dir}/encoder_tail{suffix}.pth')
                 marca = '  [mejor]'
             if verbose:
                 print(f'ep {ep:4d} loss {tot/len(train_set):.4f} | '
@@ -361,9 +443,14 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         model.eval()
+        if finetuning:
+            encoder.eval()           # OJO fork: retorna None, no encadenar
         for name, mem, s in [('train_t10', train_set[-1][0], train_set[-1][1]),
                              ("unseen_t10", mem_u, s_u)]:
             with torch.no_grad():
+                if finetuning:
+                    sc, t = mem
+                    mem = live_mem(sc, t, grad=False)
                 traj, valid = model(mem, (s['feat'] / SCALE).to(dev), s['n'])
             pred = (s['cv'].to(dev) + traj[0, :s['n']] * SCALE).cpu().numpy()
             fig, ax = plt.subplots(figsize=(10, 10))

@@ -96,16 +96,28 @@ def summarize(csv_path):
     print(f'\nn por arquitectura: {n_per_arch}')
 
 
-def run(archs, epochs, lr, hist, enc_ckpt, cache_dir, csv_path, dev='cuda'):
+def run(archs, epochs, lr, hist, enc_ckpt, cache_dir, csv_path, dev='cuda',
+       folds_subset=None, finetune_blocks=0, enc_lr=1e-5, model_arch='wayformer'):
     scenes, folds = make_folds()
     print(f'25 escenas -> {N_FOLDS} folds de {len(folds[0])}')
     print(f'arquitecturas a correr esta invocación: {archs}')
+    fold_ids = folds_subset if folds_subset is not None else list(range(N_FOLDS))
 
-    encoder = load_frozen_encoder(enc_ckpt, dev)
-    print('[cache] precalentando features del encoder (una vez por escena)...')
-    for i, sc in enumerate(scenes):
-        encode_sweeps(encoder, sc, list(range(11)), dev, cache_dir=cache_dir)
-        print(f'  [{i+1}/25] {sc[:8]} cacheada')
+    finetuning = finetune_blocks > 0
+    encoder = None
+    if not finetuning:
+        # frozen: se carga UNA vez y se reusa (nunca muta) + cache en disco
+        encoder = load_frozen_encoder(enc_ckpt, dev)
+        print('[cache] precalentando features del encoder (una vez por escena)...')
+        for i, sc in enumerate(scenes):
+            encode_sweeps(encoder, sc, list(range(11)), dev, cache_dir=cache_dir)
+            print(f'  [{i+1}/25] {sc[:8]} cacheada')
+    else:
+        # fine-tuning: el encoder MUTA durante cada corrida -> hay que
+        # recargarlo desde el checkpoint ANTES de cada fold/seed, si no,
+        # una corrida contamina a la siguiente con pesos ya ajustados
+        print('[fine-tune] el encoder se recarga fresco antes de cada corrida '
+              '(sus pesos cambian durante el entrenamiento)')
 
     ya = {(r['fold'], r['seed'], r['arch']) for r in read_csv(csv_path)}
     new_file = not os.path.exists(csv_path)
@@ -114,24 +126,28 @@ def run(archs, epochs, lr, hist, enc_ckpt, cache_dir, csv_path, dev='cuda'):
         if new_file:
             writer.writerow(['fold', 'seed', 'arch', 'ade8', 'ade5', 'fde', 'acc',
                              'train_ade8', 'best_ep', 'held_out_scenes'])
-        for fi, held_out in enumerate(folds):
+        for fi in fold_ids:
+            held_out = folds[fi]
             train_scenes = [s for s in scenes if s not in held_out]
             for seed in SEEDS:
-                for arch in archs:
-                    if (fi, seed, arch) in ya:
-                        print(f'[saltado] fold {fi} seed {seed} {arch} (ya en CSV)')
+                for arch_label in archs:
+                    if (fi, seed, arch_label) in ya:
+                        print(f'[saltado] fold {fi} seed {seed} {arch_label} (ya en CSV)')
                         continue
-                    run_dir = f'work_dirs/cv/fold{fi}_seed{seed}_{arch}'
-                    print(f'\n--- fold {fi} seed {seed} arch {arch} '
+                    run_dir = f'work_dirs/cv/fold{fi}_seed{seed}_{arch_label}'
+                    print(f'\n--- fold {fi} seed {seed} arch {arch_label} '
                           f'(held-out: {[h[:8] for h in held_out]}) ---')
+                    enc_this_run = (load_frozen_encoder(enc_ckpt, dev)
+                                   if finetuning else encoder)
                     m, ep = train_decoder(
                         train_scenes, held_out, epochs=epochs, lr=lr,
-                        arch=arch, hist=hist, out_dir=run_dir, seed=seed,
-                        encoder=encoder, cache_dir=cache_dir, eval_every=20,
-                        save_viz=False, verbose=False, dev=dev)
+                        arch=model_arch, hist=hist, out_dir=run_dir, seed=seed,
+                        encoder=enc_this_run, cache_dir=cache_dir, eval_every=20,
+                        save_viz=False, verbose=False, dev=dev,
+                        finetune_encoder_blocks=finetune_blocks, enc_lr=enc_lr)
                     print(f'  -> ADE8 {m["ade8"]:.2f}  ADE5 {m["ade5"]:.2f}  '
                           f'FDE {m["fde"]:.2f}  (mejor ep {ep})')
-                    writer.writerow([fi, seed, arch, m['ade8'], m['ade5'],
+                    writer.writerow([fi, seed, arch_label, m['ade8'], m['ade5'],
                                      m['fde'], m['acc'], m['train_ade8'], ep,
                                      ';'.join(held_out)])
                     fcsv.flush()
@@ -150,12 +166,29 @@ def main():
                     default=['wayformer', 'baseline'])
     ap.add_argument('--out', default='work_dirs/cv')
     ap.add_argument('--cache', default='work_dirs/mae_feat_cache_100sw')
+    ap.add_argument('--folds', nargs='+', type=int, default=None,
+                    help='restringir a estos folds (default: los 5)')
+    ap.add_argument('--finetune-blocks', type=int, default=0,
+                    help='descongelar los últimos N bloques del encoder '
+                         '(0 = frozen, comportamiento original)')
+    ap.add_argument('--enc-lr', type=float, default=1e-5)
+    ap.add_argument('--label', default=None,
+                    help='etiqueta del arch en el CSV cuando se hace '
+                         'fine-tuning (default: "<arch>_ft<N>")')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     csv_path = f'{args.out}/cv_results.csv'
 
-    run(args.archs, args.epochs, args.lr, args.hist, args.enc, args.cache,
-       csv_path)
+    if args.finetune_blocks > 0:
+        model_arch = args.archs[0]           # una sola clase de modelo aquí
+        label = args.label or f'{model_arch}_ft{args.finetune_blocks}'
+        run([label], args.epochs, args.lr, args.hist, args.enc, args.cache,
+           csv_path, folds_subset=args.folds,
+           finetune_blocks=args.finetune_blocks, enc_lr=args.enc_lr,
+           model_arch=model_arch)
+    else:
+        run(args.archs, args.epochs, args.lr, args.hist, args.enc, args.cache,
+           csv_path, folds_subset=args.folds)
     summarize(csv_path)
 
 
