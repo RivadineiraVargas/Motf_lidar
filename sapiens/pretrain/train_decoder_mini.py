@@ -163,10 +163,23 @@ class MiniWayformerDecoder(nn.Module):
 
 
 @torch.no_grad()
-def encode_sweeps(encoder, scene, ts, dev):
+def encode_sweeps(encoder, scene, ts, dev, cache_dir=None):
     """OJO fork: MAEViT ignora mask=False y siempre enmascara. Con
     mask_ratio=0 conserva TODOS los tokens (permutados, irrelevante para
-    cross-attn; el pos embed va antes del shuffle). latent = (1, L+1cls, 384)."""
+    cross-attn: es un set no-ordenado consumido por cross-attention, el
+    orden no afecta el resultado). latent = (1, L+1cls, 384).
+
+    cache_dir: si se da, cachea en disco por escena (todo `ts` junto) para
+    no recodificar la misma escena en cada corrida (clave para validación
+    cruzada: 25 escenas se codifican UNA vez, se reusan en fold x seed x arch).
+    """
+    if cache_dir is not None:
+        path = os.path.join(cache_dir, f'{scene}.pt')
+        if os.path.exists(path):
+            cached = torch.load(path, map_location=dev)
+            if all(t in cached for t in ts):
+                return {t: cached[t] for t in ts}
+
     old_ratio = encoder.mask_ratio
     encoder.mask_ratio = 0.0
     lat = {}
@@ -176,6 +189,10 @@ def encode_sweeps(encoder, scene, ts, dev):
             f'latent inesperado {tuple(latent.shape)}'
         lat[t] = latent.float()
     encoder.mask_ratio = old_ratio
+
+    if cache_dir is not None:
+        os.makedirs(cache_dir, exist_ok=True)
+        torch.save({t: v.cpu() for t, v in lat.items()}, path)
     return lat
 
 
@@ -193,61 +210,66 @@ def metrics(traj, valid, s, dev):
     return ade.item(), ade5.item(), fde.item(), acc.item()
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--scenes', nargs='+', default=['2a81f5233075e987'])
-    ap.add_argument('--unseen', nargs='+', default=['82f90331a1dfe968'])
-    ap.add_argument('--epochs', type=int, default=500)
-    ap.add_argument('--lr', type=float, default=1e-3)
-    ap.add_argument('--arch', choices=['wayformer', 'baseline'], default='wayformer')
-    ap.add_argument('--hist', type=int, default=1,
-                    help='k sweeps de historia como entrada (Sec.1 Claudine)')
-    ap.add_argument('--enc', default=CKPT,
-                    help='checkpoint del encoder MAE congelado')
-    ap.add_argument('--out', default='work_dirs/decoder_mini')
-    args = ap.parse_args()
-    os.makedirs(args.out, exist_ok=True)
-    dev = 'cuda'
-    torch.manual_seed(0)
-
+def load_frozen_encoder(enc_ckpt, dev):
     init_default_scope('mmpretrain')
     cfg = Config.fromfile(CFG)
     mae = MODELS.build({**cfg.model, 'data_preprocessor': cfg.data_preprocessor})
-    sd = torch.load(args.enc, map_location='cpu').get('state_dict')
+    sd = torch.load(enc_ckpt, map_location='cpu').get('state_dict')
     mae.load_state_dict(sd, strict=False)
     encoder = mae.backbone.to(dev)
     encoder.eval()          # OJO: este fork retorna None en .eval(), no encadenar
     for p in encoder.parameters():
         p.requires_grad = False
+    return encoder
+
+
+def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
+                  enc_ckpt=CKPT, out_dir='work_dirs/decoder_mini', seed=0,
+                  encoder=None, cache_dir=None, eval_every=20, save_viz=True,
+                  verbose=True, dev='cuda'):
+    """Entrena el decoder mini y devuelve (best_ade8, best_ep, history).
+    Única fuente de verdad del loop de entrenamiento — usada tanto por el
+    CLI (main) como por cross_validate_decoder.py, para que ambos caminos
+    nunca diverjan.
+
+    encoder: si se pasa (ya cargado), se reusa en vez de recargar el
+    checkpoint — ahorra I/O cuando se llama muchas veces (validación cruzada).
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    torch.manual_seed(seed)
+    if encoder is None:
+        encoder = load_frozen_encoder(enc_ckpt, dev)
 
     ts = list(range(11))                                         # t=0..10 (hay LiDAR)
-    k = args.hist
-    hist_of = lambda lat, t: [lat[max(t - i, 0)] for i in range(k)]  # clamp en t=0
+    hist_of = lambda lat, t: [lat[max(t - i, 0)] for i in range(hist)]  # clamp t=0
     train_set = []
-    for sc in args.scenes:
-        lat = encode_sweeps(encoder, sc, ts, dev)
+    for sc in scenes:
+        lat = encode_sweeps(encoder, sc, ts, dev, cache_dir=cache_dir)
         for t in ts:
             s = build_sample(sc, t)
             if s['n'] > 0:
                 train_set.append((hist_of(lat, t), s))
     unseen_evals = []
-    for usc in args.unseen:
-        lat_u = encode_sweeps(encoder, usc, ts, dev)
+    for usc in unseen:
+        lat_u = encode_sweeps(encoder, usc, ts, dev, cache_dir=cache_dir)
         unseen_evals.append((hist_of(lat_u, 10), build_sample(usc, 10)))
     mem_u, s_u = unseen_evals[0]
-    print(f'train: {len(train_set)} muestras, objetos medios '
-          f'{np.mean([s["n"] for _, s in train_set]):.1f}; unseen n={s_u["n"]}')
+    if verbose:
+        print(f'train: {len(train_set)} muestras, objetos medios '
+              f'{np.mean([s["n"] for _, s in train_set]):.1f}; '
+              f'unseen escenas={len(unseen_evals)}')
 
-    model = (MiniWayformerDecoder() if args.arch == 'wayformer'
+    model = (MiniWayformerDecoder() if arch == 'wayformer'
              else MiniBaseline()).to(dev)
     best_ade, best_ep = float('inf'), 0
-    suffix = '' if args.arch == 'wayformer' else f'_{args.arch}'
-    best_path = f'{args.out}/decoder_mini{suffix}.pth'
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
+    suffix = '' if arch == 'wayformer' else f'_{arch}'
+    best_path = f'{out_dir}/decoder_mini{suffix}.pth'
+    best_metrics = None
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
     huber = nn.SmoothL1Loss(reduction='none')
     bce = nn.BCEWithLogitsLoss()
 
-    for ep in range(1, args.epochs + 1):
+    for ep in range(1, epochs + 1):
         model.train(); tot = 0.0
         for mem, s in train_set:
             n = s['n']
@@ -261,7 +283,7 @@ def main():
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
             tot += loss.item()
-        if ep % 20 == 0 or ep == 1:
+        if ep % eval_every == 0 or ep == 1:
             model.eval()
             with torch.no_grad():
                 mem, s = train_set[-1]
@@ -272,40 +294,67 @@ def main():
                 un = [sum(x) / len(x) for x in zip(*uns)]
             marca = ''
             if un[0] < best_ade:
-                best_ade, best_ep = un[0], ep
+                best_ade, best_ep, best_metrics = un[0], ep, dict(
+                    ade8=un[0], ade5=un[1], fde=un[2], acc=un[3],
+                    train_ade8=tr[0])
                 torch.save(model.state_dict(), best_path)
                 marca = '  [mejor]'
-            print(f'ep {ep:4d} loss {tot/len(train_set):.4f} | '
-                  f'train ADE8 {tr[0]:.2f} ADE5 {tr[1]:.2f} FDE {tr[2]:.2f} '
-                  f'acc {tr[3]:.2f} | UNSEEN ADE8 {un[0]:.2f} ADE5 {un[1]:.2f} '
-                  f'FDE {un[2]:.2f} acc {un[3]:.2f}{marca}')
+            if verbose:
+                print(f'ep {ep:4d} loss {tot/len(train_set):.4f} | '
+                      f'train ADE8 {tr[0]:.2f} ADE5 {tr[1]:.2f} FDE {tr[2]:.2f} '
+                      f'acc {tr[3]:.2f} | UNSEEN ADE8 {un[0]:.2f} ADE5 {un[1]:.2f} '
+                      f'FDE {un[2]:.2f} acc {un[3]:.2f}{marca}')
 
-    print(f'[early-stop] mejor checkpoint: ep {best_ep} '
-          f'(UNSEEN ADE8 {best_ade:.2f}) -> {best_path}')
-    model.load_state_dict(torch.load(best_path, map_location=dev))
-    # viz BEV: GT verde, pred rojo, posición actual azul (train t=10 y unseen)
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    model.eval()
-    for name, mem, s in [('train_t10', train_set[-1][0], train_set[-1][1]),
-                         ("unseen_t10", mem_u, s_u)]:
-        with torch.no_grad():
-            traj, valid = model(mem, (s['feat'] / SCALE).to(dev), s['n'])
-        pred = (s['cv'].to(dev) + traj[0, :s['n']] * SCALE).cpu().numpy()
-        fig, ax = plt.subplots(figsize=(10, 10))
-        for i in range(s['n']):
-            c = s['cur'][i].numpy(); g = s['gt'][i].numpy(); m = s['wpm'][i].numpy() > 0
-            ax.plot(c[0], c[1], 'b.', ms=6)
-            ax.plot(np.r_[c[0], c[0] + g[m, 0]], np.r_[c[1], c[1] + g[m, 1]],
-                    'g-', lw=1.5)
-            ax.plot(np.r_[c[0], c[0] + pred[i][m, 0]], np.r_[c[1], c[1] + pred[i][m, 1]],
-                    'r--', lw=1.2)
-        ax.set_aspect('equal'); ax.grid(alpha=0.3)
-        ax.set_title(f'{name}: GT verde / pred rojo / actual azul (ego, m)')
-        fig.savefig(f'{args.out}/bev_{name}.png', dpi=120, bbox_inches='tight')
-        plt.close(fig)
-    print(f'[OK] modelo y BEV guardados en {args.out}/')
+    if verbose:
+        print(f'[early-stop] mejor checkpoint: ep {best_ep} '
+              f'(UNSEEN ADE8 {best_ade:.2f}) -> {best_path}')
+
+    if save_viz:
+        model.load_state_dict(torch.load(best_path, map_location=dev))
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        model.eval()
+        for name, mem, s in [('train_t10', train_set[-1][0], train_set[-1][1]),
+                             ("unseen_t10", mem_u, s_u)]:
+            with torch.no_grad():
+                traj, valid = model(mem, (s['feat'] / SCALE).to(dev), s['n'])
+            pred = (s['cv'].to(dev) + traj[0, :s['n']] * SCALE).cpu().numpy()
+            fig, ax = plt.subplots(figsize=(10, 10))
+            for i in range(s['n']):
+                c = s['cur'][i].numpy(); g = s['gt'][i].numpy()
+                m = s['wpm'][i].numpy() > 0
+                ax.plot(c[0], c[1], 'b.', ms=6)
+                ax.plot(np.r_[c[0], c[0] + g[m, 0]], np.r_[c[1], c[1] + g[m, 1]],
+                        'g-', lw=1.5)
+                ax.plot(np.r_[c[0], c[0] + pred[i][m, 0]], np.r_[c[1], c[1] + pred[i][m, 1]],
+                        'r--', lw=1.2)
+            ax.set_aspect('equal'); ax.grid(alpha=0.3)
+            ax.set_title(f'{name}: GT verde / pred rojo / actual azul (ego, m)')
+            fig.savefig(f'{out_dir}/bev_{name}.png', dpi=120, bbox_inches='tight')
+            plt.close(fig)
+        if verbose:
+            print(f'[OK] modelo y BEV guardados en {out_dir}/')
+
+    return best_metrics, best_ep
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--scenes', nargs='+', default=['2a81f5233075e987'])
+    ap.add_argument('--unseen', nargs='+', default=['82f90331a1dfe968'])
+    ap.add_argument('--epochs', type=int, default=500)
+    ap.add_argument('--lr', type=float, default=1e-3)
+    ap.add_argument('--arch', choices=['wayformer', 'baseline'], default='wayformer')
+    ap.add_argument('--hist', type=int, default=1,
+                    help='k sweeps de historia como entrada (Sec.1 Claudine)')
+    ap.add_argument('--enc', default=CKPT,
+                    help='checkpoint del encoder MAE congelado')
+    ap.add_argument('--out', default='work_dirs/decoder_mini')
+    args = ap.parse_args()
+    train_decoder(args.scenes, args.unseen, epochs=args.epochs, lr=args.lr,
+                 arch=args.arch, hist=args.hist, enc_ckpt=args.enc,
+                 out_dir=args.out)
 
 
 if __name__ == '__main__':
