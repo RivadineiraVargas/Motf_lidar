@@ -1,8 +1,9 @@
 """
-cross_validate_decoder.py — Blinda el resultado "la escena LiDAR ayuda"
-(Wayformer 7.19m vs baseline 7.85m en 82f9) con validación cruzada por
-escenas + semillas múltiples. Sin esto, esa conclusión sale de UNA sola
-medición y no es defendible frente a una pregunta de significancia.
+cross_validate_decoder.py — Blinda con validación cruzada por escenas +
+semillas cualquier comparación entre arquitecturas del decoder mini. Nació
+para testear "la escena LiDAR ayuda" (Wayformer vs baseline) y se generalizó
+para poder agregar arquitecturas nuevas (p.ej. wayformer_pooled) sin
+re-correr lo que ya está medido.
 
 Diseño (deterministic, dos fuentes de varianza separadas):
   - 5 FOLDS: las 25 escenas se parten en 5 grupos de 5 (orden alfabético
@@ -10,31 +11,36 @@ Diseño (deterministic, dos fuentes de varianza separadas):
     vistas" y las 20 restantes son train. Mide varianza ENTRE ESCENAS.
   - 3 SEEDS por fold: reinicializa los pesos del decoder (misma partición
     de datos). Mide varianza de INICIALIZACIÓN.
-  - 2 arquitecturas (wayformer, baseline) en cada combinación fold x seed,
-    para poder comparar de forma PAREADA (misma condición, mismos datos).
+  - Arquitecturas seleccionables con --archs: se pueden agregar corridas
+    nuevas al mismo cv_results.csv (modo append) sin repetir las que ya
+    están, y el resumen final SIEMPRE lee el archivo completo del disco
+    (no solo lo corrido en esta invocación) para comparar todo lo disponible.
 
 Optimización: las features del encoder MAE se cachean UNA vez por escena
-(25 escenas) y se reusan en las 5x3x2=30 corridas -> evita recodificar lo
-mismo 30 veces (el costo dominante sería si no se cachea).
+(25 escenas) y se reusan entre corridas -> evita recodificar lo mismo.
 
 Uso:
+  # corrida original (wayformer + baseline):
   conda run -n sapiens_gpu python cross_validate_decoder.py \
-      --enc work_dirs/rv_rect_overfit100/epoch_3000.pth \
-      --epochs 100 --out work_dirs/cv
+      --enc work_dirs/rv_rect_overfit100/epoch_3000.pth --epochs 100
+
+  # agregar una arquitectura nueva al mismo CSV, sin re-correr las otras:
+  conda run -n sapiens_gpu python cross_validate_decoder.py \
+      --archs wayformer_pooled --epochs 100
 """
 import argparse
 import csv
 import os
 import statistics as st
+from itertools import combinations
 
 import numpy as np
-import torch
 
-from train_decoder_mini import ROOT, CKPT, load_frozen_encoder, train_decoder
+from train_decoder_mini import ROOT, load_frozen_encoder, train_decoder, encode_sweeps
 
 N_FOLDS = 5
 SEEDS = [0, 1, 2]
-ARCHS = ['wayformer', 'baseline']
+ALL_ARCHS = ['wayformer', 'baseline', 'wayformer_pooled']
 
 
 def make_folds():
@@ -44,6 +50,93 @@ def make_folds():
     return scenes, folds
 
 
+def read_csv(csv_path):
+    if not os.path.exists(csv_path):
+        return []
+    with open(csv_path, newline='') as f:
+        r = csv.DictReader(f)
+        rows = []
+        for row in r:
+            row['fold'] = int(row['fold']); row['seed'] = int(row['seed'])
+            row['ade8'] = float(row['ade8'])
+            rows.append(row)
+        return rows
+
+
+def summarize(csv_path):
+    rows = read_csv(csv_path)
+    if not rows:
+        print('[resumen] sin datos aún'); return
+    archs = sorted(set(r['arch'] for r in rows))
+    n_per_arch = {a: sum(1 for r in rows if r['arch'] == a) for a in archs}
+
+    print('\n' + '=' * 70)
+    print(f'RESUMEN acumulado ({csv_path})')
+    print('=' * 70)
+    for a in archs:
+        vals = [r['ade8'] for r in rows if r['arch'] == a]
+        print(f'{a:18s}  ADE8 = {st.mean(vals):.2f} ± '
+              f'{st.stdev(vals) if len(vals) > 1 else 0:.2f}  '
+              f'(min {min(vals):.2f}, max {max(vals):.2f}, n={len(vals)})')
+
+    print('\nComparaciones PAREADAS (mismo fold+seed en ambos archs):')
+    for a1, a2 in combinations(archs, 2):
+        idx1 = {(r['fold'], r['seed']): r['ade8'] for r in rows if r['arch'] == a1}
+        idx2 = {(r['fold'], r['seed']): r['ade8'] for r in rows if r['arch'] == a2}
+        keys = sorted(set(idx1) & set(idx2))
+        if len(keys) < 2:
+            continue
+        diffs = [idx1[k] - idx2[k] for k in keys]
+        d_mean, d_std = st.mean(diffs), st.stdev(diffs)
+        wins1 = sum(1 for d in diffs if d < 0)
+        n = len(diffs)
+        t_stat = d_mean / (d_std / np.sqrt(n)) if d_std > 0 else float('nan')
+        print(f'  {a1} - {a2}: diff medio {d_mean:+.2f} ± {d_std:.2f}  '
+              f'({a1} gana en {wins1}/{n})  t={t_stat:.2f} (n={n}, orientativo)')
+    print(f'\nn por arquitectura: {n_per_arch}')
+
+
+def run(archs, epochs, lr, hist, enc_ckpt, cache_dir, csv_path, dev='cuda'):
+    scenes, folds = make_folds()
+    print(f'25 escenas -> {N_FOLDS} folds de {len(folds[0])}')
+    print(f'arquitecturas a correr esta invocación: {archs}')
+
+    encoder = load_frozen_encoder(enc_ckpt, dev)
+    print('[cache] precalentando features del encoder (una vez por escena)...')
+    for i, sc in enumerate(scenes):
+        encode_sweeps(encoder, sc, list(range(11)), dev, cache_dir=cache_dir)
+        print(f'  [{i+1}/25] {sc[:8]} cacheada')
+
+    ya = {(r['fold'], r['seed'], r['arch']) for r in read_csv(csv_path)}
+    new_file = not os.path.exists(csv_path)
+    with open(csv_path, 'a', newline='') as fcsv:
+        writer = csv.writer(fcsv)
+        if new_file:
+            writer.writerow(['fold', 'seed', 'arch', 'ade8', 'ade5', 'fde', 'acc',
+                             'train_ade8', 'best_ep', 'held_out_scenes'])
+        for fi, held_out in enumerate(folds):
+            train_scenes = [s for s in scenes if s not in held_out]
+            for seed in SEEDS:
+                for arch in archs:
+                    if (fi, seed, arch) in ya:
+                        print(f'[saltado] fold {fi} seed {seed} {arch} (ya en CSV)')
+                        continue
+                    run_dir = f'work_dirs/cv/fold{fi}_seed{seed}_{arch}'
+                    print(f'\n--- fold {fi} seed {seed} arch {arch} '
+                          f'(held-out: {[h[:8] for h in held_out]}) ---')
+                    m, ep = train_decoder(
+                        train_scenes, held_out, epochs=epochs, lr=lr,
+                        arch=arch, hist=hist, out_dir=run_dir, seed=seed,
+                        encoder=encoder, cache_dir=cache_dir, eval_every=20,
+                        save_viz=False, verbose=False, dev=dev)
+                    print(f'  -> ADE8 {m["ade8"]:.2f}  ADE5 {m["ade5"]:.2f}  '
+                          f'FDE {m["fde"]:.2f}  (mejor ep {ep})')
+                    writer.writerow([fi, seed, arch, m['ade8'], m['ade5'],
+                                     m['fde'], m['acc'], m['train_ade8'], ep,
+                                     ';'.join(held_out)])
+                    fcsv.flush()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--enc', default='work_dirs/rv_rect_overfit100/epoch_3000.pth')
@@ -51,84 +144,19 @@ def main():
     ap.add_argument('--lr', type=float, default=3e-4)
     ap.add_argument('--hist', type=int, default=1,
                     help='sweeps de MEMORIA DE ESCENA (no confundir con la '
-                         'historia de trayectoria por objeto, que ya está '
-                         'fija en H_PAST=10 dentro de build_sample). El '
-                         'experimento a+b+c a blindar usó hist=1.')
+                         'historia de trayectoria por objeto, ya fija en '
+                         'H_PAST=10 dentro de build_sample).')
+    ap.add_argument('--archs', nargs='+', choices=ALL_ARCHS,
+                    default=['wayformer', 'baseline'])
     ap.add_argument('--out', default='work_dirs/cv')
     ap.add_argument('--cache', default='work_dirs/mae_feat_cache_100sw')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
-    dev = 'cuda'
-
-    scenes, folds = make_folds()
-    print(f'25 escenas -> {N_FOLDS} folds de {len(folds[0])}: '
-          f'{[f[:2] for f in [[s[:8] for s in fo] for fo in folds]]}')
-
-    encoder = load_frozen_encoder(args.enc, dev)
-
-    # precalentar cache: codifica las 25 escenas UNA vez antes del loop
-    print('[cache] precalentando features del encoder (una vez por escena)...')
-    from train_decoder_mini import encode_sweeps
-    for i, sc in enumerate(scenes):
-        encode_sweeps(encoder, sc, list(range(11)), dev, cache_dir=args.cache)
-        print(f'  [{i+1}/25] {sc[:8]} cacheada')
-
-    rows = []
     csv_path = f'{args.out}/cv_results.csv'
-    with open(csv_path, 'w', newline='') as fcsv:
-        writer = csv.writer(fcsv)
-        writer.writerow(['fold', 'seed', 'arch', 'ade8', 'ade5', 'fde', 'acc',
-                         'train_ade8', 'best_ep', 'held_out_scenes'])
 
-        for fi, held_out in enumerate(folds):
-            train_scenes = [s for s in scenes if s not in held_out]
-            for seed in SEEDS:
-                for arch in ARCHS:
-                    run_dir = f'{args.out}/fold{fi}_seed{seed}_{arch}'
-                    print(f'\n--- fold {fi} seed {seed} arch {arch} '
-                          f'(held-out: {[h[:8] for h in held_out]}) ---')
-                    m, ep = train_decoder(
-                        train_scenes, held_out, epochs=args.epochs, lr=args.lr,
-                        arch=arch, hist=args.hist, out_dir=run_dir, seed=seed,
-                        encoder=encoder, cache_dir=args.cache, eval_every=20,
-                        save_viz=False, verbose=False, dev=dev)
-                    print(f'  -> ADE8 {m["ade8"]:.2f}  ADE5 {m["ade5"]:.2f}  '
-                          f'FDE {m["fde"]:.2f}  (mejor ep {ep})')
-                    row = [fi, seed, arch, m['ade8'], m['ade5'], m['fde'],
-                          m['acc'], m['train_ade8'], ep, ';'.join(held_out)]
-                    rows.append(row)
-                    writer.writerow(row)
-                    fcsv.flush()
-
-    # --- resumen ---
-    print('\n' + '=' * 70)
-    print('RESUMEN (mean ± std sobre 5 folds x 3 semillas = 15 corridas c/u)')
-    print('=' * 70)
-    for arch in ARCHS:
-        vals = [r[3] for r in rows if r[2] == arch]     # ade8
-        print(f'{arch:10s}  ADE8 = {st.mean(vals):.2f} ± {st.stdev(vals):.2f}  '
-              f'(min {min(vals):.2f}, max {max(vals):.2f}, n={len(vals)})')
-
-    # comparación PAREADA: mismo fold+seed, wayformer vs baseline
-    print('\nComparación pareada (wayformer - baseline, por fold x seed):')
-    diffs = []
-    for fi in range(N_FOLDS):
-        for seed in SEEDS:
-            w = next(r[3] for r in rows if r[0] == fi and r[1] == seed and r[2] == 'wayformer')
-            b = next(r[3] for r in rows if r[0] == fi and r[1] == seed and r[2] == 'baseline')
-            diffs.append(w - b)
-    d_mean, d_std = st.mean(diffs), st.stdev(diffs)
-    wins = sum(1 for d in diffs if d < 0)
-    print(f'  diff ADE8 media: {d_mean:+.2f} ± {d_std:.2f} '
-          f'(negativo = wayformer gana)')
-    print(f'  wayformer gana en {wins}/{len(diffs)} combinaciones fold x seed')
-    # t-test pareado simple (sin scipy): t = mean_diff / (std_diff/sqrt(n))
-    n = len(diffs)
-    t_stat = d_mean / (d_std / np.sqrt(n)) if d_std > 0 else float('nan')
-    print(f'  t pareado = {t_stat:.2f} (n={n}; |t|>~2.1 sugiere significancia '
-          f'a p<0.05 con {n-1} grados de libertad, orientativo sin scipy)')
-
-    print(f'\n[OK] resultados completos en {csv_path}')
+    run(args.archs, args.epochs, args.lr, args.hist, args.enc, args.cache,
+       csv_path)
+    summarize(csv_path)
 
 
 if __name__ == '__main__':

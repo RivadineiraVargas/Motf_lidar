@@ -162,6 +162,51 @@ class MiniWayformerDecoder(nn.Module):
         return traj, valid
 
 
+class MiniWayformerPooled(nn.Module):
+    """Wayformer con PUENTE LIVIANO: en vez de que las K=100 queries del
+    decoder atiendan directamente a los ~6784 tokens crudos del encoder MAE
+    (mucho ruido/capacidad para overfitear con pocas escenas — ver hallazgo
+    de la validación cruzada del 29/07), se resume cada sweep con `n_pool`
+    latentes aprendidos (estilo Perceiver / latent queries de Wayformer,
+    ver docs/ESTUDIO_WAYFORMER.md) ANTES de la cross-attention final."""
+
+    def __init__(self, enc_dim=384, d=192, heads=4, layers=2, max_hist=8,
+                n_pool=16):
+        super().__init__()
+        self.q_proj = nn.Sequential(nn.Linear(FEAT_DIM, d), nn.ReLU(), nn.Linear(d, d))
+        self.empty = nn.Parameter(torch.zeros(1, 1, d))
+        self.mem_proj = nn.Linear(enc_dim, d)
+        self.t_emb = nn.Parameter(torch.zeros(max_hist, d))
+        # latentes de pooling: compartidos entre sweeps, resumen ~6784 -> n_pool
+        self.pool_latents = nn.Parameter(torch.randn(1, n_pool, d) * 0.02)
+        self.pool_attn = nn.MultiheadAttention(d, heads, batch_first=True)
+        layer = nn.TransformerDecoderLayer(d_model=d, nhead=heads,
+                                           dim_feedforward=4 * d, batch_first=True)
+        self.dec = nn.TransformerDecoder(layer, num_layers=layers)
+        self.head_traj = nn.Linear(d, N_WP * 2)
+        nn.init.zeros_(self.head_traj.weight)   # residuo arranca en 0 = piso CV
+        nn.init.zeros_(self.head_traj.bias)
+        self.head_valid = nn.Linear(d, 1)
+
+    def forward(self, mem, cur, n):
+        if not isinstance(mem, (list, tuple)):
+            mem = [mem]
+        pooled = []
+        for i, m in enumerate(mem):
+            mp = self.mem_proj(m) + self.t_emb[i]                # (1, L, d)
+            lat = self.pool_latents.expand(mp.shape[0], -1, -1)
+            out, _ = self.pool_attn(lat, mp, mp)                 # (1, n_pool, d)
+            pooled.append(out)
+        mem_pooled = torch.cat(pooled, dim=1)                    # (1, k*n_pool, d)
+        q = self.q_proj(cur.unsqueeze(0))
+        pad = self.empty.expand(1, K_SLOTS - n, -1)
+        q = torch.cat([q, pad], dim=1)
+        h = self.dec(q, mem_pooled)
+        traj = self.head_traj(h).view(1, K_SLOTS, N_WP, 2)
+        valid = self.head_valid(h).squeeze(-1)
+        return traj, valid
+
+
 @torch.no_grad()
 def encode_sweeps(encoder, scene, ts, dev, cache_dir=None):
     """OJO fork: MAEViT ignora mask=False y siempre enmascara. Con
@@ -259,8 +304,9 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
               f'{np.mean([s["n"] for _, s in train_set]):.1f}; '
               f'unseen escenas={len(unseen_evals)}')
 
-    model = (MiniWayformerDecoder() if arch == 'wayformer'
-             else MiniBaseline()).to(dev)
+    model = {'wayformer': MiniWayformerDecoder,
+             'wayformer_pooled': MiniWayformerPooled,
+             'baseline': MiniBaseline}[arch]().to(dev)
     best_ade, best_ep = float('inf'), 0
     suffix = '' if arch == 'wayformer' else f'_{arch}'
     best_path = f'{out_dir}/decoder_mini{suffix}.pth'
@@ -345,7 +391,8 @@ def main():
     ap.add_argument('--unseen', nargs='+', default=['82f90331a1dfe968'])
     ap.add_argument('--epochs', type=int, default=500)
     ap.add_argument('--lr', type=float, default=1e-3)
-    ap.add_argument('--arch', choices=['wayformer', 'baseline'], default='wayformer')
+    ap.add_argument('--arch', choices=['wayformer', 'wayformer_pooled', 'baseline'],
+                    default='wayformer')
     ap.add_argument('--hist', type=int, default=1,
                     help='k sweeps de historia como entrada (Sec.1 Claudine)')
     ap.add_argument('--enc', default=CKPT,
