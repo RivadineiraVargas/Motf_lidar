@@ -485,10 +485,18 @@ def main():
     ap.add_argument('--enc', default=CKPT,
                     help='checkpoint del encoder MAE congelado')
     ap.add_argument('--out', default='work_dirs/decoder_mini')
+    ap.add_argument('--finetune-blocks', type=int, default=0,
+                    help='descongelar los últimos N bloques del encoder '
+                         '(0 = frozen, comportamiento validado)')
+    ap.add_argument('--enc-lr', type=float, default=1e-5)
+    ap.add_argument('--eval-every', type=int, default=20)
+    ap.add_argument('--seed', type=int, default=0)
     args = ap.parse_args()
     train_decoder(args.scenes, args.unseen, epochs=args.epochs, lr=args.lr,
                  arch=args.arch, hist=args.hist, enc_ckpt=args.enc,
-                 out_dir=args.out)
+                 out_dir=args.out, seed=args.seed, eval_every=args.eval_every,
+                 finetune_encoder_blocks=args.finetune_blocks,
+                 enc_lr=args.enc_lr)
 
 
 if __name__ == '__main__':
