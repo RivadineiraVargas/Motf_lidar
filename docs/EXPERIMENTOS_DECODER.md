@@ -17,12 +17,17 @@ velocidad constante (`gt - cv`), 25 escenas de `waymo_clean`, horizonte 8s
 | 2 | Wayformer, atención cruda (~6784 tok) | 4.97 ± 1.67 (n=15) | pierde, t=-3.07 | ❌ |
 | 3 | Wayformer, pooling 16 latentes | 5.00 ± 1.67 (n=15) | pierde, t=-4.17 | ❌ |
 | 4 | Wayformer, fine-tune último bloque encoder (20 ép) | 2.84 ± 0.29 (n=3, solo fold 0) | pierde, t=-2.63 | ❌ |
-| 5 | Wayformer, fine-tune último bloque, 60 ép | *en curso* | — | ⏳ |
+| 5 | Wayformer, fine-tune último bloque, 60 ép, 1 semilla | 2.51 (mejor, ép.20) | **gana** vs wayformer congelado (2.65) | ⚠️ mixto — ver nota |
 
-**Conclusión provisoria (hasta el experimento 4):** ningún cambio arquitectónico
-probado extrae señal generalizable de la escena LiDAR con 20 escenas de
-entrenamiento. El baseline puramente cinemático gana de forma consistente y
-estadísticamente significativa en las tres variantes con escena.
+**Conclusión provisoria:** ningún cambio de PUENTE (crudo, pooling) extrae
+señal generalizable de la escena con 20 escenas de train. El fine-tuning
+parcial del encoder muestra la primera señal de mejora en ADE8 (exp. 5,
+época 20) pero con una regresión seria y simultánea en la accuracy de
+validez (1.00 → 0.54) — no es una mejora limpia. Además, ese mismo punto
+(fold 0, semilla 0, época 20) dio un número distinto en el experimento 4
+(2.79) que en el 5 (2.51) con configuración nominalmente idéntica —
+indicio de no-determinismo de GPU en las operaciones de atención, que hay
+que tener en cuenta antes de sacar conclusiones de una sola semilla.
 
 ---
 
@@ -152,17 +157,57 @@ entrenamiento, antes de descartar definitivamente la idea del fine-tuning.
 **Diseño:** fold 0, semilla 0 (mismo split), 60 épocas, `eval_every=10`
 (7 puntos de medición: ép. 1, 10, 20, 30, 40, 50, 60).
 
+**Resultado (fold 0, semilla 0):**
+
+| Época | ADE8 no-visto | ADE5 | FDE | Accuracy validez |
+|---|---|---|---|---|
+| 1 | 3.27 | 2.13 | 5.48 | 1.00 |
+| 10 | 2.60 | 1.51 | 4.48 | 0.54 |
+| **20** (mejor) | **2.51** | 1.70 | 3.98 | 0.54 |
+| 30 | 2.87 | 1.73 | 5.11 | 0.59 |
+| 40 | 2.87 | 1.78 | 5.03 | 0.54 |
+| 50 | 2.81 | 1.70 | 5.01 | 0.54 |
+| 60 | 2.57 | 1.56 | 4.52 | 0.54 |
+
+**Diagnóstico — resultado MIXTO, no una mejora limpia:**
+
+1. **Confirma sobreajuste más allá de ép.20**: mejora rápida ép.1→20, luego
+   empeora (ép.30-40) y nunca vuelve a bajar del óptimo de ép.20. La curva
+   confirma que 20 épocas (experimento 4) no era "cortar muy pronto".
+2. **En su mejor punto, SÍ supera al wayformer congelado** en el mismo
+   fold/semilla: 2.51 vs 2.65 (experimento 1-2, fold 0 semilla 0).
+3. **Pero con una regresión seria simultánea**: la accuracy de validez de
+   objetos cae de 1.00 a 0.54 en el mismo checkpoint — el modelo mejora la
+   trayectoria pero empeora mucho la clasificación de "¿este slot es un
+   objeto real?" (casi al azar). No es una mejora limpia.
+4. **Discrepancia de no-determinismo**: el mismo punto (fold 0, semilla 0,
+   época 20) dio 2.79 en el experimento 4 y 2.51 acá, con configuración
+   nominalmente idéntica (la única diferencia es `eval_every`, que no
+   debería alterar los pesos entrenados). Indica no-determinismo de GPU
+   en las operaciones de atención — una sola semilla no es enteramente
+   reproducible en este pipeline. Refuerza la necesidad de validar con
+   múltiples semillas antes de confiar en cualquier número puntual.
+
+**Próximo paso sugerido (no ejecutado aún):** si se quiere seguir esta
+línea, habría que (a) investigar por qué cae la accuracy de validez
+(¿ponderar más la pérdida BCE? ¿fine-tunear el encoder recién después de
+que las cabezas se estabilicen?), y (b) repetir con 3 semillas × early
+stopping cada 10 épocas antes de considerar esto una mejora real.
+
 **Reproducir:**
 ```
 conda run -n sapiens_gpu python train_decoder_mini.py \
-    --scenes <20 escenas de train del fold 0> \
-    --unseen <5 escenas held-out del fold 0> \
+    --scenes 2e41fe6faf5cd2ea 367b072edc9822ea 394e61f27c2a1700 4014ae5bcda2726f \
+             4a2ef30000d19d90 4b60f9400a30ceaf 7e2f727866c69ea0 82f90331a1dfe968 \
+             92ab54c34f237728 9e897ff552287bea 9ea216a54ee07b49 9fffe68876965f2e \
+             aaccfa0a1132fb83 adce80bac21c1895 ae3d6f946b8e7871 d2399ea6a028ecb2 \
+             e52c6a9366981ad e75176fd226ea04a f2ca03b1434a27e4 f7cc90b8f4611d4d \
+    --unseen 2a81f5233075e987 41692b0ec7ff4123 8e0342468563ae5e a20f67087b9a288 \
+             db4edc9bd0c9d18c \
     --enc work_dirs/rv_rect_overfit100/epoch_3000.pth --arch wayformer \
     --epochs 60 --eval-every 10 --seed 0 --finetune-blocks 1 --enc-lr 1e-5 \
     --out work_dirs/ft_trajectory
 ```
-
-*(resultados pendientes de completar)*
 
 ---
 
