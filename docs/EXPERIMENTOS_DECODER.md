@@ -18,6 +18,7 @@ velocidad constante (`gt - cv`), 25 escenas de `waymo_clean`, horizonte 8s
 | 3 | Wayformer, pooling 16 latentes | 5.00 ± 1.67 (n=15) | pierde, t=-4.17 | ❌ |
 | 4 | Wayformer, fine-tune último bloque encoder (20 ép) | 2.84 ± 0.29 (n=3, solo fold 0) | pierde, t=-2.63 | ❌ |
 | 5 | Wayformer, fine-tune último bloque, 60 ép, 1 semilla | 2.51 (mejor, ép.20) | **gana** vs wayformer congelado (2.65) | ⚠️ mixto — ver nota |
+| 6 | Barrido de horizonte 1s/3s/5s/8s (5 folds, 1 semilla) | ver curva abajo | pierde en TODOS los horizontes | ❌ el "punto dulce" de Fase 1 NO reaparece |
 
 **Conclusión provisoria:** ningún cambio de PUENTE (crudo, pooling) extrae
 señal generalizable de la escena con 20 escenas de train. El fine-tuning
@@ -225,3 +226,63 @@ conda run -n sapiens_gpu python train_decoder_mini.py \
   `train_decoder()`, única fuente de verdad del loop de entrenamiento) y
   `sapiens/pretrain/cross_validate_decoder.py` (driver de validación
   cruzada, extensible a nuevas arquitecturas vía `--archs`).
+
+---
+
+## Experimento 6: Barrido de horizonte de predicción (1s / 3s / 5s / 8s)
+
+**Fecha:** 2026-08-02. **Script:** `horizon_sweep.py`.
+
+**Hipótesis:** en la Fase 1 (pipeline viejo: encoder de vóxeles + gate) la
+escena LiDAR mostró un "punto dulce" a 3s (+25% de mejora), degradándose a
+1s (neutral) y 5s (neutral). Todos los experimentos del decoder MAE (1-5)
+fueron a 8s — más lejos que ese pico. Quizás la escena SÍ ayuda a un
+horizonte menor y estábamos midiendo en el punto equivocado.
+
+**Diseño:** por cada horizonte (2/6/10/16 waypoints = 1/3/5/8s),
+cross-validation 5 folds × 1 semilla × 2 archs (wayformer vs baseline).
+Screening (1 semilla): el objetivo es la TENDENCIA del beneficio de la
+escena a lo largo del horizonte. Encoder 100sw congelado, features
+cacheadas (independientes del horizonte).
+
+**Resultado:**
+
+| Horizonte | Wayformer (con escena) | Baseline (sin escena) | Diff pareada (way−base) | Señal |
+|---|---|---|---|---|
+| 1s | 0.52 ± 0.20 | 0.44 ± 0.15 | +0.07 ± 0.22 | baseline (2/5) |
+| 3s | 1.42 ± 0.51 | 1.31 ± 0.33 | +0.11 ± 0.41 | baseline (3/5) |
+| 5s | 2.65 ± 0.85 | 2.49 ± 0.72 | +0.16 ± 0.22 | baseline (1/5) |
+| 8s | 5.03 ± 1.78 | 4.65 ± 1.62 | +0.38 ± 0.27 | baseline (0/5) |
+
+*(diff = ADE_wayformer − ADE_baseline en metros; negativo = la escena ayuda)*
+
+**Diagnóstico — el "punto dulce" de 3s NO se reproduce con el encoder MAE:**
+
+1. La escena **no ayuda a ningún horizonte** — la diff es positiva (baseline
+   gana) en los 4.
+2. **El daño crece con el horizonte** (+0.07 → +0.11 → +0.16 → +0.38), lo
+   contrario de un pico en 3s.
+3. **Matiz honesto**: a 1s y 3s la diff es chica y con desvío mayor que la
+   media (±0.22 y ±0.41) → ahí es prácticamente un empate/ruido, no un
+   daño claro. El daño solo es nítido a 8s (baseline gana 5/5). O sea: a
+   horizonte corto la escena es *neutral* (no ayuda ni molesta); a horizonte
+   largo *molesta*. Nunca ayuda.
+4. **Por qué difiere de Fase 1**: aquel +25% a 3s usaba encoder de vóxeles
+   **re-pre-entrenado en las escenas de train** + un mecanismo de *gate*
+   aprendible — un pipeline distinto. Ese resultado NO transfiere al encoder
+   MAE range-view congelado. Sugiere que la diferencia estaba en el
+   encoder/gate, no en el horizonte.
+
+**Conclusión:** descarta la hipótesis del horizonte. Junto con los
+experimentos 2-5 (puente crudo, pooling, fine-tuning), son cuatro ángulos
+distintos que confirman lo mismo: **con el encoder MAE congelado y 20
+escenas de train, la escena LiDAR no aporta señal predictiva sobre la
+cinemática + histórico del objeto, a ningún horizonte.** Consistente con el
+paper WOMD-LiDAR (mejora marginal de ADE incluso con features supervisadas
+y ~100k escenas).
+
+**Reproducir:**
+```
+conda run -n sapiens_gpu python horizon_sweep.py \
+    --enc work_dirs/rv_rect_overfit100/epoch_3000.pth --epochs 100
+```

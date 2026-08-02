@@ -245,9 +245,12 @@ def metrics(traj, valid, s, dev):
     n = s['n']
     pred = s['cv'].to(dev) + traj[0, :n] * SCALE   # cv + residuo aprendido
     gt, wpm = s['gt'].to(dev), s['wpm'].to(dev)
-    d = ((pred - gt) ** 2).sum(-1).sqrt()                        # (n,16)
-    ade = (d * wpm).sum() / wpm.sum()
-    ade5 = (d[:, :10] * wpm[:, :10]).sum() / wpm[:, :10].sum()   # 5s = 10 wp
+    d = ((pred - gt) ** 2).sum(-1).sqrt()                        # (n, N_WP)
+    ade = (d * wpm).sum() / wpm.sum()                            # ADE @ horizonte
+    # "ade5" = ADE al mínimo entre 10 wp (5s) y el horizonte actual, para que
+    # el barrido de horizonte con N_WP<10 no rompa el slice
+    k5 = min(10, N_WP)
+    ade5 = (d[:, :k5] * wpm[:, :k5]).sum() / wpm[:, :k5].sum()
     last = wpm.cumsum(1).argmax(1)                               # último wp disponible
     fde = d[torch.arange(n), last].mean()
     lab = torch.zeros(K_SLOTS, device=dev); lab[:n] = 1
@@ -306,7 +309,8 @@ def encode_one_live(encoder, scene, t, dev):
 def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
                   enc_ckpt=CKPT, out_dir='work_dirs/decoder_mini', seed=0,
                   encoder=None, cache_dir=None, eval_every=20, save_viz=True,
-                  verbose=True, dev='cuda', finetune_encoder_blocks=0, enc_lr=1e-5):
+                  verbose=True, dev='cuda', finetune_encoder_blocks=0, enc_lr=1e-5,
+                  n_wp=None):
     """Entrena el decoder mini y devuelve (best_ade8, best_ep, history).
     Única fuente de verdad del loop de entrenamiento — usada tanto por el
     CLI (main) como por cross_validate_decoder.py, para que ambos caminos
@@ -320,7 +324,16 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
     enc_lr). Fuerza cache_dir=None (el encoder cambia entre épocas; cachear
     sería servir features obsoletas). Exploración post-29/07: ¿el problema
     era el encoder 100% congelado, no el diseño del puente?
+
+    n_wp: horizonte de predicción en waypoints (2/6/10/16 = 1/3/5/8s).
+    Fija el global N_WP ANTES de construir samples y modelos (build_sample,
+    los head_traj de los 3 modelos y metrics leen ese global). Contenido:
+    se setea explícito al inicio de cada llamada, así corridas secuenciales
+    con distinto horizonte no se contaminan.
     """
+    global N_WP
+    if n_wp is not None:
+        N_WP = n_wp
     os.makedirs(out_dir, exist_ok=True)
     torch.manual_seed(seed)
     if encoder is None:
