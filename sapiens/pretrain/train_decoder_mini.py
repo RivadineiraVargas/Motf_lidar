@@ -207,6 +207,79 @@ class MiniWayformerPooled(nn.Module):
         return traj, valid
 
 
+class GatedDecoderLayer(nn.Module):
+    """Equivalente a nn.TransformerDecoderLayer (post-norm), pero con la
+    contribución de la CROSS-ATTENTION (la rama de escena) escalada por un
+    gate. Hay que escribirla a mano: en la capa de PyTorch la cross-attn
+    está fusionada adentro y no se puede escalar por separado.
+
+    El gate NO lo posee la capa — llega por `forward`, compartido por todas,
+    para que sea UN escalar por modelo (igual que en Fase 1) y no uno por capa."""
+
+    def __init__(self, d, heads):
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(d, heads, batch_first=True)
+        self.cross_attn = nn.MultiheadAttention(d, heads, batch_first=True)
+        self.ff = nn.Sequential(nn.Linear(d, 4 * d), nn.ReLU(), nn.Linear(4 * d, d))
+        self.n1, self.n2, self.n3 = nn.LayerNorm(d), nn.LayerNorm(d), nn.LayerNorm(d)
+
+    def forward(self, x, mem, g):
+        a, _ = self.self_attn(x, x, x)
+        x = self.n1(x + a)
+        c, _ = self.cross_attn(x, mem, mem)
+        x = self.n2(x + g * c)                  # <-- GATE sobre la rama de escena
+        return self.n3(x + self.ff(x))
+
+
+class MiniWayformerGated(nn.Module):
+    """Wayformer + GATE aprendible sobre la escena — tercer ingrediente de la
+    Fase 1 (los otros dos, encoder adaptado al dominio y horizonte 3s, se
+    replicaron el 06/08: −20.4%, p=0.0006 en el fold 0).
+
+    Escalar único aprendido, aplicado como tanh(scene_gate), igual que el
+    modelo de vóxeles de Fase 1 (mmpretrain/models/trajectory_pred/
+    trajectory_model_attn.py). Deja que el modelo aprenda CUÁNTO condicionar
+    en la escena en vez de obligarlo a usarla siempre: el diagnóstico viejo
+    (escena 9e89) era que sobre-corregía justo donde la velocidad constante
+    ya era perfecta.
+
+    gate_init=0.5, NO 0: arrancar en 0 anula el gradiente de toda la rama de
+    escena y el gate no abre nunca — candado documentado en Fase 1.
+
+    Bonus de interpretabilidad: tanh(scene_gate) al final del entrenamiento
+    es una medida directa de cuánto decidió el modelo apoyarse en la escena."""
+
+    def __init__(self, enc_dim=384, d=192, heads=4, layers=2, max_hist=8,
+                 gate_init=0.5):
+        super().__init__()
+        self.q_proj = nn.Sequential(nn.Linear(FEAT_DIM, d), nn.ReLU(), nn.Linear(d, d))
+        self.empty = nn.Parameter(torch.zeros(1, 1, d))
+        self.mem_proj = nn.Linear(enc_dim, d)
+        self.t_emb = nn.Parameter(torch.zeros(max_hist, d))
+        gate_init = float(max(min(gate_init, 0.99), -0.99))
+        self.scene_gate = nn.Parameter(torch.atanh(torch.tensor([gate_init])))
+        self.blocks = nn.ModuleList([GatedDecoderLayer(d, heads)
+                                     for _ in range(layers)])
+        self.head_traj = nn.Linear(d, N_WP * 2)
+        nn.init.zeros_(self.head_traj.weight)   # residuo arranca en 0 = piso CV
+        nn.init.zeros_(self.head_traj.bias)
+        self.head_valid = nn.Linear(d, 1)
+
+    def forward(self, mem, cur, n):
+        if not isinstance(mem, (list, tuple)):
+            mem = [mem]
+        mems = [self.mem_proj(m) + self.t_emb[i] for i, m in enumerate(mem)]
+        mem = torch.cat(mems, dim=1)                             # (1,k*L,d)
+        q = self.q_proj(cur.unsqueeze(0))                        # (1,n,d)
+        pad = self.empty.expand(1, K_SLOTS - n, -1)
+        h = torch.cat([q, pad], dim=1)                           # (1,K,d)
+        g = torch.tanh(self.scene_gate)
+        for blk in self.blocks:
+            h = blk(h, mem, g)
+        return (self.head_traj(h).view(1, K_SLOTS, N_WP, 2),
+                self.head_valid(h).squeeze(-1))
+
+
 @torch.no_grad()
 def encode_sweeps(encoder, scene, ts, dev, cache_dir=None):
     """OJO fork: MAEViT ignora mask=False y siempre enmascara. Con
@@ -377,7 +450,10 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
 
     model = {'wayformer': MiniWayformerDecoder,
              'wayformer_pooled': MiniWayformerPooled,
+             'wayformer_gated': MiniWayformerGated,
              'baseline': MiniBaseline}[arch]().to(dev)
+    gate_of = (lambda: float(torch.tanh(model.scene_gate).item())) \
+        if hasattr(model, 'scene_gate') else (lambda: None)
     best_ade, best_ep = float('inf'), 0
     suffix = '' if arch == 'wayformer' else f'_{arch}'
     best_path = f'{out_dir}/decoder_mini{suffix}.pth'
@@ -434,21 +510,31 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
             if un[0] < best_ade:
                 best_ade, best_ep, best_metrics = un[0], ep, dict(
                     ade8=un[0], ade5=un[1], fde=un[2], acc=un[3],
-                    train_ade8=tr[0])
+                    train_ade8=tr[0], gate=gate_of())
                 torch.save(model.state_dict(), best_path)
                 if finetuning:
                     torch.save({k: v for k, v in encoder.state_dict().items()},
                                f'{out_dir}/encoder_tail{suffix}.pth')
                 marca = '  [mejor]'
             if verbose:
+                g = gate_of()
                 print(f'ep {ep:4d} loss {tot/len(train_set):.4f} | '
                       f'train ADE8 {tr[0]:.2f} ADE5 {tr[1]:.2f} FDE {tr[2]:.2f} '
                       f'acc {tr[3]:.2f} | UNSEEN ADE8 {un[0]:.2f} ADE5 {un[1]:.2f} '
-                      f'FDE {un[2]:.2f} acc {un[3]:.2f}{marca}')
+                      f'FDE {un[2]:.2f} acc {un[3]:.2f}'
+                      + (f' | gate {g:+.3f}' if g is not None else '') + marca)
+
+    # gate al FINAL del entrenamiento, no solo en el mejor checkpoint: si el
+    # early-stop se queda en una época temprana, el gate del checkpoint casi no
+    # se movio de su init y no dice nada sobre a donde converge la decision.
+    if best_metrics is not None:
+        best_metrics['gate_final'] = gate_of()
 
     if verbose:
+        gf = gate_of()
         print(f'[early-stop] mejor checkpoint: ep {best_ep} '
-              f'(UNSEEN ADE8 {best_ade:.2f}) -> {best_path}')
+              f'(UNSEEN ADE8 {best_ade:.2f}) -> {best_path}'
+              + (f' | gate final {gf:+.3f}' if gf is not None else ''))
 
     if save_viz:
         model.load_state_dict(torch.load(best_path, map_location=dev))

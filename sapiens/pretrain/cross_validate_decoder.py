@@ -40,7 +40,7 @@ from train_decoder_mini import ROOT, load_frozen_encoder, train_decoder, encode_
 
 N_FOLDS = 5
 SEEDS = [0, 1, 2]
-ALL_ARCHS = ['wayformer', 'baseline', 'wayformer_pooled']
+ALL_ARCHS = ['wayformer', 'baseline', 'wayformer_pooled', 'wayformer_gated']
 
 
 def make_folds():

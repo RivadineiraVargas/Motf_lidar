@@ -18,17 +18,61 @@ velocidad constante (`gt - cv`), 25 escenas de `waymo_clean`, horizonte 8s
 | 3 | Wayformer, pooling 16 latentes | 5.00 ± 1.67 (n=15) | pierde, t=-4.17 | ❌ |
 | 4 | Wayformer, fine-tune último bloque encoder (20 ép) | 2.84 ± 0.29 (n=3, solo fold 0) | pierde, t=-2.63 | ❌ |
 | 5 | Wayformer, fine-tune último bloque, 60 ép, 1 semilla | 2.51 (mejor, ép.20) | **gana** vs wayformer congelado (2.65) | ⚠️ mixto — ver nota |
-| 6 | Barrido de horizonte 1s/3s/5s/8s (5 folds, 1 semilla) | ver curva abajo | pierde en TODOS los horizontes | ❌ el "punto dulce" de Fase 1 NO reaparece |
+| 6 | Barrido de horizonte 1s/3s/5s/8s (5 folds, 1 semilla) | ver curva abajo | pierde en TODOS los horizontes | ❌ el "punto dulce" de Fase 1 NO reaparece — **revertido por el exp. 8** |
+| 7 | Encoder MAE **adaptado al dominio** (fold 0, 3 semillas, 8s) | 2.287 ± 0.052 (n=3) | gana, t=−2.10 (3/3, no signif.) | ⚠️ primera señal a favor |
+| 8 | Barrido de horizonte con **encoder de dominio** (fold 0) | **0.726 ± 0.079 @3s** (n=8) | **gana, t=−5.94, p=0.0006, −20.4%** | ✅ **el pico de 3s reaparece** |
+| 9 | Gate aprendible sobre la escena (fold 0, 3s, 8 semillas) | 0.759 ± 0.047 (n=8) | gana a baseline (t=−8.80) pero **empata con exp. 8** (t=+1.16) | ➖ no aporta; el valor aprendido sí informa |
+| 10 | **Réplica en el fold 4** del exp. 8 (3s, 8 semillas) | 1.792 ± 0.116 (n=8) | empata, t=−0.59 (4/8), −1.3% | ❌ **el efecto del fold 0 NO se replica** |
 
-**Conclusión provisoria:** ningún cambio de PUENTE (crudo, pooling) extrae
-señal generalizable de la escena con 20 escenas de train. El fine-tuning
-parcial del encoder muestra la primera señal de mejora en ADE8 (exp. 5,
-época 20) pero con una regresión seria y simultánea en la accuracy de
-validez (1.00 → 0.54) — no es una mejora limpia. Además, ese mismo punto
-(fold 0, semilla 0, época 20) dio un número distinto en el experimento 4
-(2.79) que en el 5 (2.51) con configuración nominalmente idéntica —
-indicio de no-determinismo de GPU en las operaciones de atención, que hay
-que tener en cuenta antes de sacar conclusiones de una sola semilla.
+**OJO CON LA ESCALA — no comparar entre bloques.** Los experimentos 1-3 y 6
+son promedios de **5 folds**; los 4, 5, 7, 8 y 9 son **solo fold 0** y el 10
+es **solo fold 4**. La dificultad cambia mucho entre folds (baseline 8s: 4.65
+a 5 folds vs 2.34 en el fold 0; baseline 3s: 0.912 en el fold 0 vs 1.816 en el
+fold 4). Sólo son comparables entre sí las filas del mismo fold y el mismo
+horizonte — por eso todas las comparaciones se hacen PAREADAS contra el
+baseline medido en ese mismo fold/semilla.
+
+**Conclusión al 2026-08-07 — el efecto es REAL pero DEPENDE DEL SPLIT.**
+En el fold 0, con encoder adaptado al dominio y midiendo a 3s, la escena
+aporta de forma contundente: **−20.4% de ADE (t=−5.94, p=0.0006, 8/8
+semillas)**. En el fold 4, mismo protocolo y mismas 8 semillas: **−1.3%,
+t=−0.59, 4/8 — un nulo**. Media de los dos folds: −0.105, con sd ENTRE
+folds de 0.115. **No corresponde afirmar "la escena ayuda" sin más folds.**
+
+> ⚠️ Una versión previa de esta sección (escrita el 06/08, antes del exp. 10)
+> decía que la hipótesis quedaba "sostenida bajo dos condiciones
+> identificadas". Eso se escribió con un solo fold medido y quedó
+> sobrevendido; el exp. 10 lo corrige.
+
+**Lo que sí quedó establecido:**
+
+1. Los seis experimentos negativos (1-6) compartían dos defectos que ninguno
+   controlaba a la vez: encoder MAE **genérico** y horizonte **8s**.
+   Corrigiendo ambos aparece señal real, al menos en algunos splits.
+2. De los 3 ingredientes de la Fase 1, quedan replicados 2 (encoder de
+   dominio + horizonte 3s); el 3ro, el gate, **no aporta** (exp. 9) — pero
+   converge a 0.092 ± 0.005, evidencia independiente de que la señal de
+   escena es real y chica.
+3. **La variable que más manda es el SPLIT, no la arquitectura.** Con el
+   encoder genérico a 3s, la diff por fold ya iba de −0.153 (fold 1) a
+   +0.815 (fold 3); el "+0.109 promedio" del exp. 6 lo empujaba casi
+   entero un solo fold. Con 25 escenas, cada fold retiene 5 y basta una con
+   maniobras atípicas para mover la media.
+
+**Lo que sigue sin estar probado:** faltan los folds 1, 2 y 3 (un encoder de
+dominio por fold, ~12.5h c/u ≈ 37h de GPU) para tener una respuesta de 5
+folds. Previsión con los datos actuales: media entre −0.05 y −0.10,
+negativa pero probablemente no significativa, dominada por el fold 3.
+Sería consistente con el paper WOMD-LiDAR (mejora marginal aun con ~100k
+escenas y features supervisadas).
+
+**Advertencia metodológica vigente (de los exp. 4-5):** el mismo punto
+(fold 0, semilla 0, ép. 20) dio 2.79 en el exp. 4 y 2.51 en el 5 con
+configuración nominalmente idéntica — no-determinismo de GPU en las
+operaciones de atención. Se confirmó otra vez en el exp. 8: el renglón de
+8s reprodujo la MEDIA del exp. 7 (2.29 en ambos) con semillas individuales
+muy distintas (sd 0.24 vs 0.05). **Fiarse de medias sobre varias semillas,
+nunca de una corrida suelta.**
 
 ---
 
@@ -285,4 +329,241 @@ y ~100k escenas).
 ```
 conda run -n sapiens_gpu python horizon_sweep.py \
     --enc work_dirs/rv_rect_overfit100/epoch_3000.pth --epochs 100
+```
+
+---
+
+## Experimento 7: Encoder MAE adaptado al dominio
+
+**Fecha:** 2026-08-04. **Commit:** `b57a986`.
+**Script:** `sapiens/pretrain/run_domain_encoder_experiment.sh`.
+
+**Hipótesis:** los experimentos 1-6 usaron siempre el encoder MAE *genérico*
+(`rv_rect_overfit100`, 100 sweeps de 24 escenas). En la Fase 1, el +25% a 3s
+vino de un encoder de vóxeles **re-pre-entrenado en las escenas de train**.
+¿Y si el cuello de botella no era el puente ni el horizonte, sino que las
+features del encoder genérico no separan información de movimiento?
+
+**Diseño:** encoder MAE re-pre-entrenado desde cero SOLO en las 20 escenas de
+train del fold 0 (`config_rangeview_rect_fold0.py`, 1000 ép, loss 2.15→0.40,
+~12.5h), sin fuga de las 5 retenidas. Después, decoder wayformer con ese
+encoder **congelado**, 3 semillas, fold 0. Aísla UNA variable: el encoder.
+
+**Resultado (fold 0, 3 semillas, ADE8):**
+
+| Configuración | ADE8 |
+|---|---|
+| Wayformer + encoder **dominio** | **2.287 ± 0.052** |
+| Baseline sin escena | 2.342 ± 0.038 |
+| Wayformer + encoder genérico (exp. 2) | 2.620 ± 0.421 |
+
+```
+dominio - baseline: -0.055 ± 0.045  (a favor de la escena 3/3)  t=-2.10
+   -> t_crit(gl=2) = 4.303  =>  NO significativo (p ~ 0.052)
+```
+
+**Diagnóstico:** primera vez en 6 experimentos que la escena no daña. Señales
+secundarias: `best_ep` 40/40/20 (aprende mucho más allá del piso CV) contra
+`best_ep`=1 en 2/3 con el genérico, y la sd entre semillas colapsa de 0.421 a
+0.052 — el encoder de dominio destraba la optimización.
+
+**Refuerzo (importante):** el encoder genérico se entrenó sobre 24 escenas
+excluyendo sólo `82f9…` (ver `utilities/make_rect_png_100.py`), o sea que
+**vio en auto-supervisado las 5 escenas retenidas del fold 0**. Tenía ventaja
+de fuga y aun así perdió contra el de dominio.
+
+**Reproducir:**
+```
+bash sapiens/pretrain/run_domain_encoder_experiment.sh
+```
+
+---
+
+## Experimento 8: Barrido de horizonte CON el encoder de dominio
+
+**Fecha:** 2026-08-06. **Script:** `horizon_sweep.py` (ahora con
+`--folds`, `--seeds`, `--horizons`, `--archs`).
+
+**Hipótesis:** el experimento 6 concluyó "no hay punto dulce a 3s", pero midió
+el encoder **genérico** — el que el experimento 7 identificó como cuello de
+botella. La pregunta del horizonte quedaba sin responder para el encoder
+adaptado al dominio.
+
+**Diseño:** fold 0 (obligatorio: usar el encoder de dominio en otro fold sería
+FUGA), horizontes 1s/3s/5s/8s. 3 semillas; a 3s se ampliaron a **8 semillas**
+al ver la señal. Features ya cacheadas (`cache_fold0_domain`) → ~1h total.
+
+**Resultado (diff pareada = wayformer − baseline; negativo = la escena ayuda):**
+
+| Horizonte | n | Diff (encoder DOMINIO) | t | Relativo | Diff (encoder genérico, exp. 6) |
+|---|---|---|---|---|---|
+| 1s | 3 | +0.001 ± 0.051 | 0.05 | +0.4% | +0.07 |
+| **3s** | **8** | **−0.186 ± 0.089** | **−5.94** | **−20.4%** | +0.11 |
+| 5s | 3 | −0.182 ± 0.213 | −1.48 | −11.7% | +0.16 |
+| 8s | 3 | −0.053 ± 0.206 | −0.44 | −2.3% | +0.38 |
+
+A 3s, con 8 semillas: **p = 0.00058**, IC95% `[-0.247, -0.124]` (no incluye el
+cero), **8/8 semillas a favor de la escena**.
+
+**Diagnóstico:**
+
+1. **El signo se invierte en 3s y 5s** respecto del encoder genérico. El
+   experimento 6 medía el encoder equivocado; el punto dulce existe y depende
+   de que el encoder esté adaptado al dominio.
+2. **La forma de la curva replica la Fase 1**: neutral a 1s, pico a 3s, decae
+   después. El −20.4% es del mismo orden que el +25% de Fase 1 con vóxeles.
+3. **Mecanismo coherente:** a 1s la velocidad constante ya es casi perfecta
+   (0.32 m) y no hay nada que aportar; a 3s el baseline se estanca (`best_ep`=1
+   en 2/3, piso CV) y la escena corrige de verdad; a 8s la señal se diluye en
+   la incertidumbre acumulada.
+4. **Las 5 semillas extra bajaron la media de −0.210 a −0.186** (regresión a la
+   media leve) pero la sd NO se disparó (0.089) → no era ruido de semillas.
+
+**Reproducir:**
+```
+conda run -n sapiens_gpu python horizon_sweep.py \
+    --enc work_dirs/rv_rect_fold0/epoch_1000.pth \
+    --folds 0 --seeds 0 1 2 3 4 5 6 7 --horizons 3s \
+    --cache work_dirs/cache_fold0_domain --out work_dirs/horizon_domain \
+    --epochs 100
+```
+
+---
+
+## Experimento 9: Gate aprendible sobre la rama de escena
+
+**Fecha:** 2026-08-06. **Arquitectura:** `MiniWayformerGated` +
+`GatedDecoderLayer` en `train_decoder_mini.py` (arch `wayformer_gated`).
+
+**Hipótesis:** tercer y último ingrediente de la Fase 1. Allá un escalar
+aprendido `tanh(scene_gate)` (init 0.5) escalaba la rama de escena, dejando
+que el modelo aprendiera *cuánto* condicionar en ella. El diagnóstico viejo
+(escena `9e89`) era que los modelos sobre-corrigen justo donde la velocidad
+constante ya es perfecta.
+
+**Implementación:** hubo que escribir la capa de decoder a mano — en
+`nn.TransformerDecoderLayer` la cross-attention está fusionada con la
+self-attention y el FFN, y el gate tiene que escalar **sólo** la rama de
+escena (`x = n2(x + g * cross_attn(x, mem, mem))`). Escalar la memoria de
+entrada no equivale: la softmax normaliza sobre las claves. Un único gate
+compartido entre las 2 capas (como el escalar de Fase 1), por eso el
+parámetro vive en el módulo padre y entra por `forward`. `gate_init=0.5` y no
+0: arrancar en 0 anula el gradiente de toda la rama y el gate no abre nunca
+(candado documentado en Fase 1).
+
+**Resultado (fold 0, 3s, 8 semillas, ADE@3s):**
+
+| Modelo | ADE@3s |
+|---|---|
+| Wayformer **gated** | 0.759 ± 0.047 |
+| Wayformer sin gate (exp. 8) | 0.726 ± 0.079 |
+| Baseline sin escena | 0.912 ± 0.022 |
+
+```
+gated  - baseline: -0.152 ± 0.049  (8/8)  t=-8.80   -> la escena ayuda
+gated  - ungated : +0.033 ± 0.082  (4/8)  t=+1.16   -> EMPATAN
+```
+
+**Diagnóstico — el gate NO aporta, pero lo que aprende sí informa:**
+
+1. **Empata con el wayformer común** (t=1.16, 4/8). El tercer ingrediente de
+   Fase 1 no transfiere. Explicación: allá el decoder era un MLP con la escena
+   *concatenada*, donde sin gate la rama entraba siempre a fuerza completa;
+   acá la cross-attention con conexión residual ya puede atenuar la escena por
+   su cuenta, así que el gate es redundante.
+2. **El valor aprendido es el hallazgo real.** Las 8 semillas convergen a
+   `tanh(scene_gate)` = **0.0917 ± 0.0051** partiendo de 0.500 — el modelo
+   decide solo, con altísima reproducibilidad, que la escena debe entrar al
+   **~9% de su fuerza**. Y con esa atenuación igual le gana al baseline por
+   0.152 (t=−8.80). Corrobora desde un ángulo independiente el diagnóstico del
+   experimento 3 (pooling): **la señal de escena es real pero chica, y demasiada
+   capacidad cruda la ahoga.** El pooling la atacó reduciendo tokens; el gate,
+   reduciendo amplitud; ambos apuntan a lo mismo.
+3. **`best_ep`=1 en 8/8**: aprende la corrección útil en UNA época y de ahí en
+   adelante sólo sobreajusta (el ungated mejora hasta ép. 20-80 en 5/8).
+4. **Nota de método:** con 1 sola semilla este experimento parecía un claro
+   empeoramiento (0.81 vs 0.675, `best_ep` 1 vs 20). Con 8 semillas, empatan.
+   Otro caso del no-determinismo advertido en el resumen ejecutivo.
+
+**Reproducir:**
+```
+conda run -n sapiens_gpu python horizon_sweep.py \
+    --enc work_dirs/rv_rect_fold0/epoch_1000.pth \
+    --folds 0 --seeds 0 1 2 3 4 5 6 7 --horizons 3s --archs wayformer_gated \
+    --cache work_dirs/cache_fold0_domain --out work_dirs/horizon_domain \
+    --epochs 100
+```
+
+---
+
+## Experimento 10: Réplica en un segundo fold (¿generaliza el −20.4%?)
+
+**Fecha:** 2026-08-06/07. **Script:** `sapiens/pretrain/run_fold4_experiment.sh`
+(encadena encoder → decoder). **Config:** `config_rangeview_rect_fold4.py`.
+
+**Hipótesis:** todo el bloque 7-9 sale del **fold 0**. La varianza ENTRE folds
+era la fuente dominante de ruido (sd 0.326 a 8s, contra 0.089 entre semillas),
+así que un solo split no puede sostener el hallazgo. ¿El −20.4% a 3s aparece
+también en otro fold?
+
+**Diseño:** encoder MAE re-pre-entrenado desde cero SOLO en las 20 escenas de
+train del **fold 4** (1000 ép, loss 2.15→0.3907, ~13h; el del fold 0 cerró en
+0.4007 — trayectorias casi calcadas). Después, decoder a 3s con **8 semillas**,
+wayformer y baseline, evaluando en las 5 escenas retenidas del fold 4. Mismo
+protocolo que el exp. 8, cambiando sólo el split.
+
+**Resultado (ADE@3s):**
+
+| Fold | Wayformer | Baseline | Diff pareada | t | A favor | Relativo |
+|---|---|---|---|---|---|---|
+| 0 (exp. 8) | 0.726 ± 0.079 | 0.912 ± 0.022 | **−0.186 ± 0.089** | **−5.94** | 8/8 | −20.4% |
+| **4 (este)** | 1.792 ± 0.116 | 1.816 ± 0.007 | **−0.024 ± 0.115** | −0.59 | 4/8 | −1.3% |
+
+```
+media de los 2 folds: -0.105   |   sd ENTRE folds: 0.115
+sd entre semillas dentro de cada fold: 0.089 (f0) / 0.115 (f4)
+```
+
+**Diagnóstico:**
+
+1. **El efecto no se replica.** En el fold 4 es un nulo limpio (4/8 semillas,
+   t=−0.59). El fold 0 no era representativo del conjunto.
+2. **El fold 4 es un split mucho más difícil**: baseline 1.816 contra 0.912 del
+   fold 0 (2x). Y su baseline es extraordinariamente estable (±0.007, `best_ep`=1
+   casi siempre) — o sea que ahí la velocidad constante es difícil de mejorar y
+   el margen donde la escena podría aportar es más chico.
+3. **ERROR DE SELECCIÓN, documentado a propósito:** el fold 4 se eligió como
+   "caso adversarial" citando diff **+0.834** con encoder genérico... pero ese
+   número es **a 8s**. A 3s — el horizonte que se iba a medir — el ranking por
+   fold con encoder genérico era otro:
+
+   | fold | 0 | 1 | 2 | 3 | 4 |
+   |---|---|---|---|---|---|
+   | diff @3s (genérico, 1 semilla) | −0.066 | −0.153 | +0.100 | **+0.815** | −0.151 |
+
+   El fold adversarial a 3s era el **3**, no el 4. Se arrastró un ranking de un
+   horizonte a otro sin verificarlo. El fold 4 resultó un split neutro: la
+   prueba fue menos exigente de lo previsto, aunque tampoco sesgada a favor.
+4. **Hallazgo colateral que reencuadra los exp. 1-6:** esa misma tabla muestra
+   que con el encoder genérico a 3s los folds 0, 1 y 4 YA daban negativo. El
+   "+0.109 promedio" del exp. 6 estaba dominado por el fold 3 (+0.815). La
+   conclusión "a 3s la escena no ayuda" nunca fue pareja entre splits.
+
+**Conclusión:** con 2 folds medidos, la hipótesis queda **sostenida en un split
+y ausente en otro**. Faltan los folds 1, 2 y 3 (~37h de GPU) para una respuesta
+de 5 folds. La variable dominante del proyecto no es la arquitectura ni el
+horizonte: es **qué escenas caen en el split**, con sólo 25 escenas disponibles.
+
+**Reproducir:**
+```
+# 1) encoder de dominio del fold (12.5h)
+conda run -n sapiens_gpu python tools/train.py \
+    configs/sapiens_mae/lidar/config_rangeview_rect_fold4.py
+# 2) decoder, 3s, 8 semillas  (o directamente: bash run_fold4_experiment.sh)
+conda run -n sapiens_gpu python horizon_sweep.py \
+    --enc work_dirs/rv_rect_fold4/epoch_1000.pth \
+    --folds 4 --seeds 0 1 2 3 4 5 6 7 --horizons 3s \
+    --archs wayformer baseline \
+    --cache work_dirs/cache_fold4_domain --out work_dirs/horizon_fold4 \
+    --epochs 100
 ```

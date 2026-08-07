@@ -55,25 +55,33 @@ def summarize(csv_path):
     print('\n' + '=' * 72)
     print('BARRIDO DE HORIZONTE — beneficio de la escena por horizonte')
     print('=' * 72)
-    print(f'{"horiz":6s} {"wayformer":>18s} {"baseline":>18s} '
+    print(f'{"horiz":6s} {"arquitectura":>17s} {"con escena":>14s} {"baseline":>14s} '
           f'{"diff pareada":>16s} {"señal":>8s}')
     for hlabel, _ in HORIZONS:
-        w = {(r['fold'], r['seed']): r['ade'] for r in rows
-             if r['arch'] == f'wayformer_h{hlabel}'}
         b = {(r['fold'], r['seed']): r['ade'] for r in rows
              if r['arch'] == f'baseline_h{hlabel}'}
-        keys = sorted(set(w) & set(b))
-        if not keys:
-            continue
-        wv = [w[k] for k in keys]; bv = [b[k] for k in keys]
-        diffs = [w[k] - b[k] for k in keys]   # <0 => la escena ayuda
-        dm = st.mean(diffs)
-        ds = st.stdev(diffs) if len(diffs) > 1 else 0.0
-        wins = sum(1 for d in diffs if d < 0)
-        senal = 'ESCENA' if dm < 0 else 'baseline'
-        print(f'{hlabel:6s} {st.mean(wv):8.2f}±{(st.stdev(wv) if len(wv)>1 else 0):.2f}    '
-              f'{st.mean(bv):8.2f}±{(st.stdev(bv) if len(bv)>1 else 0):.2f}    '
-              f'{dm:+7.2f}±{ds:.2f}   {senal:>8s} ({wins}/{len(keys)})')
+        # cualquier arquitectura con escena medida a este horizonte, no solo
+        # 'wayformer' (p.ej. wayformer_gated) — si no, se agregan corridas al
+        # CSV y el resumen las ignora en silencio.
+        archs = sorted({r['arch'].rsplit(f'_h{hlabel}', 1)[0] for r in rows
+                        if r['arch'].endswith(f'_h{hlabel}')
+                        and not r['arch'].startswith('baseline')})
+        for arch in archs:
+            w = {(r['fold'], r['seed']): r['ade'] for r in rows
+                 if r['arch'] == f'{arch}_h{hlabel}'}
+            keys = sorted(set(w) & set(b))
+            if not keys:
+                continue
+            wv = [w[k] for k in keys]; bv = [b[k] for k in keys]
+            diffs = [w[k] - b[k] for k in keys]   # <0 => la escena ayuda
+            dm = st.mean(diffs)
+            ds = st.stdev(diffs) if len(diffs) > 1 else 0.0
+            wins = sum(1 for d in diffs if d < 0)
+            senal = 'ESCENA' if dm < 0 else 'baseline'
+            print(f'{hlabel:6s} {arch:>17s} '
+                  f'{st.mean(wv):8.2f}±{(st.stdev(wv) if len(wv)>1 else 0):.2f} '
+                  f'{st.mean(bv):8.2f}±{(st.stdev(bv) if len(bv)>1 else 0):.2f} '
+                  f'{dm:+9.2f}±{ds:.2f}   {senal:>8s} ({wins}/{len(keys)})')
     print('\ndiff = wayformer - baseline (ADE @ horizonte, metros). '
           'Negativo = la escena AYUDA.')
 
@@ -86,12 +94,31 @@ def main():
     ap.add_argument('--hist', type=int, default=1)
     ap.add_argument('--cache', default='work_dirs/mae_feat_cache_100sw')
     ap.add_argument('--out', default='work_dirs/horizon_sweep')
+    ap.add_argument('--folds', nargs='+', type=int, default=None,
+                    help='subconjunto de folds (default: los 5). OBLIGATORIO '
+                         'restringir al fold del encoder si el encoder fue '
+                         're-pre-entrenado en las escenas de train de ese fold '
+                         '(usarlo en otros folds seria FUGA).')
+    ap.add_argument('--seeds', nargs='+', type=int, default=[0])
+    ap.add_argument('--archs', nargs='+', default=ARCHS,
+                    help='arquitecturas a correr (default: wayformer baseline). '
+                         'El baseline no depende del encoder ni de la arch, asi '
+                         'que si ya esta medido se saltea solo.')
+    ap.add_argument('--horizons', nargs='+', default=None,
+                    choices=[h for h, _ in HORIZONS],
+                    help='subconjunto de horizontes (default: los 4). Util para '
+                         'agregar semillas solo donde hay senal.')
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     csv_path = f'{args.out}/horizon_results.csv'
     dev = 'cuda'
 
     scenes, folds = make_folds()
+    # (indice real del fold, escenas retenidas) — el indice se preserva aunque
+    # se corra un subconjunto, para que el CSV sea comparable con los barridos
+    # previos y con cv_results.csv.
+    fold_items = [(i, h) for i, h in enumerate(folds)
+                  if args.folds is None or i in args.folds]
     encoder = load_frozen_encoder(args.enc, dev)
     print('[cache] precalentando features (una vez, compartidas entre horizontes)...')
     for i, sc in enumerate(scenes):
@@ -100,18 +127,20 @@ def main():
 
     ya = {(r['fold'], r['seed'], r['arch']) for r in read_csv(csv_path)}
     new_file = not os.path.exists(csv_path)
-    total = len(HORIZONS) * len(folds) * len(SEEDS) * len(ARCHS)
+    horizons = [h for h in HORIZONS
+                if args.horizons is None or h[0] in args.horizons]
+    total = len(horizons) * len(fold_items) * len(args.seeds) * len(args.archs)
     done = 0
     with open(csv_path, 'a', newline='') as fcsv:
         writer = csv.writer(fcsv)
         if new_file:
             writer.writerow(['fold', 'seed', 'arch', 'horizon_s', 'n_wp',
                              'ade', 'fde', 'acc', 'best_ep'])
-        for hlabel, n_wp in HORIZONS:
-            for fi, held_out in enumerate(folds):
+        for hlabel, n_wp in horizons:
+            for fi, held_out in fold_items:
                 train_scenes = [s for s in scenes if s not in held_out]
-                for seed in SEEDS:
-                    for arch in ARCHS:
+                for seed in args.seeds:
+                    for arch in args.archs:
                         label = f'{arch}_h{hlabel}'
                         done += 1
                         if (fi, seed, label) in ya:
@@ -130,8 +159,14 @@ def main():
                         writer.writerow([fi, seed, label, hlabel, n_wp,
                                          m['ade8'], m['fde'], m['acc'], ep])
                         fcsv.flush()
+                        # el gate no va al CSV (romperia el esquema de los
+                        # barridos ya guardados); queda en el log, que es donde
+                        # se lee "cuanto decidio el modelo usar la escena".
+                        g, gf = m.get('gate'), m.get('gate_final')
                         print(f'       -> ADE@{hlabel} {m["ade8"]:.2f}  '
-                              f'FDE {m["fde"]:.2f}  (ep {ep})')
+                              f'FDE {m["fde"]:.2f}  (ep {ep})'
+                              + (f'  gate {g:+.3f} (final {gf:+.3f})'
+                                 if g is not None else ''))
 
     summarize(csv_path)
 
