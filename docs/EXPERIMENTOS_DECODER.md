@@ -567,3 +567,134 @@ conda run -n sapiens_gpu python horizon_sweep.py \
     --cache work_dirs/cache_fold4_domain --out work_dirs/horizon_fold4 \
     --epochs 100
 ```
+
+---
+
+## Experimento 11: CV completa de 5 folds — la escena NO ayuda (resultado definitivo)
+
+**Fecha:** 2026-08-10. **Scripts:** `run_folds_123.sh`, `run_fold3_resume.sh`.
+
+**Hipótesis:** los exp. 8-10 dejaron el efecto sostenido en el fold 0 (−20.4%,
+t=−5.94) y ausente en el fold 4. Faltaban los folds 1, 2 y 3 para promediar
+sobre los 5 y responder si el efecto es real o dependiente del split.
+
+**Diseño:** un encoder MAE de dominio por fold (re-pre-entrenado desde cero solo
+en las 20 escenas de train de ESE fold, 1000 ép, ~12.5h c/u), después decoder a
+3s con 8 semillas, wayformer vs baseline. `--folds F` obligatorio (usar el
+encoder de un fold en otro sería fuga).
+
+**Resultado (diff pareada way−base; negativo = la escena ayuda):**
+
+| fold | baseline | wayformer | diff | t | a favor | relativo |
+|---|---|---|---|---|---|---|
+| 0 | 0.912 | 0.726 | **−0.186 ± 0.089** | −5.94 | 8/8 | −20.4% |
+| 1 | 1.252 | 1.190 | −0.061 ± 0.074 | −2.35 | 6/8 | −4.9% |
+| 2 | 1.082 | 1.168 | +0.086 ± 0.084 | +2.89 | 1/8 | +7.9% |
+| 3 | 1.424 | 1.993 | **+0.570 ± 0.130** | +12.40 | 0/8 | +40.0% |
+| 4 | 1.816 | 1.792 | −0.024 ± 0.115 | −0.59 | 4/8 | −1.3% |
+
+```
+ENTRE FOLDS (n=5): +0.077 ± 0.292   t=0.589  gl=4   NO SIGNIFICATIVO
+IC95% [-0.286, +0.439]  (incluye el 0)     3/5 folds a favor
+sd ENTRE folds 0.292  vs  sd entre semillas 0.098   ->  3x
+```
+
+**Diagnóstico:**
+
+1. **El efecto no sobrevive.** La media entre folds ni siquiera mantiene el
+   signo: queda a favor del baseline. El −20.4% del fold 0 era una medición de
+   un solo split.
+2. **Validez del outlier verificada.** El fold 3 (+40%) es justo el encoder que
+   se cortó el 08/08 (máquina suspendida, Xid 154) y se retomó con `--resume`.
+   Terminó bien: loss final 0.3991 contra 0.389-0.401 de los otros cuatro. El
+   outlier no es un encoder roto. Además el exp. 10 ya lo había marcado como el
+   split adversarial a 3s (+0.815 con encoder genérico) — es un split
+   consistentemente hostil, no ruido.
+3. **LECCIÓN METODOLÓGICA (para el informe).** Muestrear bien la dimensión
+   SEMILLA no protege de nada si no se muestrea el SPLIT. En el fold 0 había
+   8 semillas, t=−5.94, p=0.0006, 8/8 a favor — y aun así el efecto era del
+   split. Es la SEGUNDA vez que pasa: el 18/07 el 7.19 vs 7.85 de una escena se
+   evaporó con la CV del 29/07. Con 25 escenas, la varianza dominante es qué
+   escenas caen en cada lado del corte.
+
+---
+
+## Experimento 12: ¿El gate rescata los splits donde la escena daña?
+
+**Fecha:** 2026-08-10. **Script:** `run_gated_folds_1234.sh`.
+
+**Hipótesis:** el fracaso del fold 3 no es "la escena no ayuda" sino algo más
+específico: el wayformer quedó 40% PEOR que el baseline, o sea que el decoder no
+logró IGNORAR la escena cuando no servía. El gate (escalar aprendible
+`tanh(scene_gate)` sobre la rama de cross-attn) es una válvula de amplitud que
+puede cerrarse hasta 0 y degradar con gracia al baseline. En el fold 0 ya se
+sabía que empata con el ungated (+0.033, t=1.16) => no costaría nada donde sí
+hay señal.
+
+**Diseño:** solo `wayformer_gated`, 3s, 8 semillas, folds 1-4 (el 0 ya estaba del
+exp. 9). Features cacheadas => ~25 min por fold, ~2h total. Los baselines ya
+estaban en los CSV y `horizon_sweep.py` aparea contra ellos.
+
+**Resultado (ADE@3s):**
+
+| fold | baseline | wayformer | gated | gate−base | gate−way |
+|---|---|---|---|---|---|
+| 0 | 0.912 | 0.726 | 0.759 | −0.152 | +0.033 |
+| 1 | 1.252 | 1.190 | 1.244 | −0.008 | +0.053 |
+| 2 | 1.082 | 1.168 | 1.245 | +0.163 | +0.077 |
+| 3 | 1.424 | 1.993 | **2.122** | +0.699 (+49.1%) | +0.129 |
+| 4 | 1.816 | 1.792 | 1.773 | −0.043 | −0.019 |
+
+```
+ENTRE FOLDS (n=5):
+  gated - baseline : +0.132 ± 0.336  t=+0.87  no significativo  (3/5)
+  gated - wayformer: +0.055 ± 0.055  t=+2.24  no significativo  (1/5)
+```
+
+**Diagnóstico:**
+
+1. **La hipótesis se refuta.** El gate no rescata el fold 3: lo empeora, de
+   +40.0% a +49.1%. Contra el ungated pierde en 4/5 folds. Ninguna variante con
+   escena le gana al baseline promediando folds.
+2. **MECANISMO DEL FALLO (lo valioso de este experimento).** `best_ep`=1 en 6/8
+   semillas del fold 3, y en la época 1 el gate todavía vale ~0.497 — casi sin
+   moverse de su init de 0.5. El early-stop congela el modelo ANTES de que la
+   válvula se cierre, así que el checkpoint que se evalúa tiene la escena
+   entrando a fuerza casi completa, justo en el split donde la escena es veneno.
+   El gate aprende a cerrarse, pero demasiado tarde para que el early-stop lo
+   aproveche. Explica por qué el gate sí servía en Fase 1: ahí el decoder era un
+   MLP que entrenaba muchas más épocas.
+   OJO al leer checkpoints: el `scene_gate` guardado es el del MEJOR checkpoint,
+   NO el convergido. El valor interpretable es `gate_final`, que se imprime en el
+   log (`train_decoder_mini.py` lo calcula aparte justo por esto).
+3. **HALLAZGO COLATERAL — lo más reproducible del proyecto.** El gate converge
+   al mismo valor en los 5 splits, desde 40 inicializaciones en 0.5:
+
+   | fold | gate_final |
+   |---|---|
+   | 0 | 0.0917 ± 0.0051 |
+   | 1 | 0.1059 ± 0.0045 |
+   | 2 | 0.1026 ± 0.0075 |
+   | 3 | **0.0772 ± 0.0079** |
+   | 4 | 0.1016 ± 0.0087 |
+
+   folds 1-4 juntos (n=32): **0.0968 ± 0.0135**. Mientras el ADE salta de −20% a
+   +40% según el split, el peso óptimo aprendido para la escena replica en
+   ~0.10 con dispersión de ±0.01. "El modelo decide solo que la escena debe
+   entrar al ~10% de su fuerza" es la afirmación cuantitativa más sólida que
+   produjo esta línea de trabajo.
+4. **Correlación gate vs beneficio: NO establecida.** r=−0.734 entre `gate_final`
+   y `way−base` sobre los 5 folds (el fold 3 cierra más el gate y es donde la
+   escena más daña), pero con n=5 el |r| crítico al 5% es 0.878 y la relación la
+   sostiene ese único punto: sacando el fold 3 se desarma. Se registra como
+   observación, no como resultado.
+
+**Reproducir:**
+```
+bash run_gated_folds_1234.sh
+# o un fold suelto:
+conda run -n sapiens_gpu python horizon_sweep.py \
+    --enc work_dirs/rv_rect_fold3/epoch_1000.pth \
+    --folds 3 --seeds 0 1 2 3 4 5 6 7 --horizons 3s --archs wayformer_gated \
+    --cache work_dirs/cache_fold3_domain --out work_dirs/horizon_fold3 --epochs 100
+```
