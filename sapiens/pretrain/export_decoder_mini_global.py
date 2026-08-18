@@ -258,7 +258,7 @@ def main():
     with open(args.txt, 'w') as f:
         f.write('\n'.join(lines) + '\n')
     print(f'[OK] {args.txt} ({len(lines)} puntos) — viewer C++: '
-          f'./show_point_cloud --input waymo_clean  (tecla t)')
+          f'./show_point_cloud --input waymo_clean_view  (tecla t)')
 
 
 if __name__ == '__main__':

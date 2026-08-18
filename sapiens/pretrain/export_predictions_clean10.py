@@ -7,7 +7,7 @@ Formato (predictions_global.txt), una línea por punto:
   kind: 0=histórico, 1=futuro real, 2=futuro predito (coords globales)
 
 Exporta las 2 escenas de validación de waymo_clean. Luego, en el viewer:
-    ./show_point_cloud --input waymo_clean/ ...   y presionar 't' para predicciones.
+    ./show_point_cloud --input waymo_clean_view/ ...   y presionar 't' para predicciones.
 
 Uso: conda activate sapiens_gpu; cd sapiens/pretrain; python export_predictions_clean10.py
 """
