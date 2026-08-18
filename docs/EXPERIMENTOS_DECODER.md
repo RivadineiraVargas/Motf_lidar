@@ -698,3 +698,101 @@ conda run -n sapiens_gpu python horizon_sweep.py \
     --folds 3 --seeds 0 1 2 3 4 5 6 7 --horizons 3s --archs wayformer_gated \
     --cache work_dirs/cache_fold3_domain --out work_dirs/horizon_fold3 --epochs 100
 ```
+
+---
+
+## Experimento 13: ¿En qué se equivoca? Dirección vs magnitud, por fold y semilla
+
+**Fecha:** 2026-08-18. **Script:** `sapiens/pretrain/angular_error_analysis.py`.
+**Datos:** `work_dirs/angular/angular_results.csv`.
+
+**Hipótesis:** los exp. 11-12 establecieron QUE el beneficio de la escena depende
+del split, pero no POR QUÉ. El ADE mezcla dos errores distintos: apuntar mal
+(dirección) y estimar mal cuánto avanza (magnitud). Separarlos debería
+identificar el modo de fallo del fold 3 (+40%).
+
+**Diseño:** por fold, se codifican una vez las 5 escenas retenidas con el encoder
+de dominio de ESE fold y se reusan las features para las 8 semillas del decoder
+(el costo lo domina el encoder). Métricas sobre objetos **móviles** (|despl. GT|
+>= 1 m): en los parados la dirección no está definida, y son el 72-75% del total.
+Se mide al último waypoint (3 s).
+
+**Contexto de los splits:** el fold 3 tiene objetos que se desplazan el DOBLE que
+los del fold 0 (5.55 m vs 2.72 m de media a 3 s; p90 19.2 vs 10.9), con la misma
+proporción de parados. Es un split de autopista.
+
+**Resultado — errores gruesos de dirección (>45°), 8 semillas por fold:**
+
+| fold | baseline | wayformer | diff pareada | t | semillas peor |
+|---|---|---|---|---|---|
+| 0 | 11.7 ± 1.3 % | 11.1 ± 1.0 % | −0.7 ± 1.6 | −1.23 | 2/8 |
+| 1 | 13.3 ± 1.3 % | 16.2 ± 1.8 % | **+2.9 ± 2.7** | 3.03 | 6/8 |
+| 2 | 13.2 ± 0.3 % | 9.5 ± 4.5 % | **−3.7 ± 4.6** | −2.31 | 2/8 |
+| 3 | 8.8 ± 1.4 % | 16.1 ± 3.3 % | **+7.3 ± 4.0** | **5.17** | **8/8** |
+| 4 | 14.8 ± 0.3 % | 12.3 ± 2.5 % | **−2.5 ± 2.3** | −3.01 | 2/8 |
+
+Mediana del error angular (caso típico): las diferencias son de ±1-2° y no
+siguen el patrón de los errores gruesos — el efecto está en la COLA, no en el
+caso típico.
+
+Sesgo de magnitud (m, negativo = se queda corto), objetos móviles:
+
+| fold | baseline | wayformer |
+|---|---|---|
+| 0 | −3.43 ± 0.65 | −3.19 ± 0.31 |
+| 1 | −3.86 ± 0.49 | −4.67 ± 0.52 |
+| 2 | −8.15 ± 0.03 | −7.42 ± 0.62 |
+| 3 | −2.95 ± 0.26 | **−4.15 ± 0.96** |
+| 4 | −4.66 ± 0.02 | −3.94 ± 0.78 |
+
+**Diagnóstico:**
+
+1. **Resultado sólido y ACOTADO:** en el fold 3 la rama de escena casi duplica
+   los fallos direccionales gruesos (16.1% vs 8.8%), con 8/8 semillas y t=5.17.
+   Combinado con que ahí los objetos se mueven el doble, cada fallo cuesta el
+   doble de metros — consistente con el +40% de ADE del exp. 11.
+2. **El patrón NO es general.** En los folds 2 y 4 la escena REDUCE los errores
+   gruesos de forma significativa (t=−2.31 y −3.01). "La escena agrega riesgo de
+   cola" no es una propiedad del método: depende del split, igual que el ADE.
+3. **La explicación NO queda demostrada.** Correlación entre el exceso de errores
+   gruesos y el daño en ADE: r=+0.687 sobre 5 folds; con n=5 el |r| crítico al 5%
+   es 0.878. No significativa, y la sostiene sobre todo el fold 3. Se registra
+   como observación, no como mecanismo probado.
+4. **AVISO DE MÉTODO (tercera vez en el proyecto).** Este análisis se corrió
+   primero con UNA semilla por fold y produjo dos afirmaciones que las 8 semillas
+   desmintieron: (a) que en el fold 0 el wayformer tenía menos errores gruesos
+   (11.8% vs 12.7% con 1 semilla -> empate, t=−1.23, con 8); (b) que calibraba
+   mejor la magnitud (era un artefacto de promediar TODOS los objetos, con el
+   ~73% parados aplastando la media; entre móviles el fold 3 va al revés).
+   Ninguna medición de este pipeline es confiable con una sola semilla.
+
+**Reproducir:**
+```
+conda run -n sapiens_gpu python angular_error_analysis.py             # 5 folds x 8 semillas
+conda run -n sapiens_gpu python angular_error_analysis.py --folds 3 --seeds 0 1 2
+```
+
+---
+
+## Simulación con el pipeline de dominio (visualización)
+
+`export_decoder_mini_global.py` quedó parametrizado (`--enc-cfg`, `--enc-ckpt`,
+`--dec`, `--dec-baseline`, `--n-wp`); los defaults conservan el comportamiento
+viejo (encoder 10sw, 8 s). El horizonte se fija en el global `N_WP` del módulo
+ANTES de construir samples y modelos, igual que hace `train_decoder()`.
+
+Cobertura SIN FUGA de las 25 escenas: cada escena la predice el modelo del fold
+que la retuvo (los 5 folds parten las 25 en grupos disjuntos), usando en cada
+fold la semilla cuyo ADE cae más cerca de la media de las 8 — fold 0 s5, fold 1
+s0, fold 2 s6, fold 3 s2, fold 4 s7. Genera `predictions_global_cv25.txt`
+(10.966 puntos, 25/25 escenas) para el viewer C++.
+
+```
+./show_point_cloud --input waymo_clean_view      # OJO: _view, no waymo_clean
+```
+(`waymo_clean` tiene bins dispersos que rompen el `reshape(64,2650)` de la vista
+superior; ver exp. de contrato de datos en CHECKLIST_CLAUDINE.md. El viewer lee
+`predictions_global.txt` con nombre fijo desde el cwd.)
+
+GIFs por escena en `work_dirs/sim_dominio_fold0_3s/` (split donde la escena
+ayudaba) y `work_dirs/sim_dominio_fold3_3s/` (split adversarial).

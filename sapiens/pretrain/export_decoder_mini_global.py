@@ -19,6 +19,7 @@ import cv2
 from mmengine.config import Config
 from mmengine.registry import init_default_scope
 from mmpretrain.registry import MODELS
+import train_decoder_mini as tdm
 from train_decoder_mini import (ROOT, CFG, CKPT, MAXR, SCALE, WP_STEP, N_WP,
                                 MiniWayformerDecoder, MiniBaseline,
                                 build_sample, encode_sweeps, center_of)
@@ -107,23 +108,43 @@ def main():
     ap.add_argument('--strip', choices=['compacta', 'rayas'], default='compacta')
     ap.add_argument('--sin-gif', action='store_true',
                     help='solo exporta el txt (rapido, p/ viewer C++)')
+    # --- modelo (default = el pipeline viejo: encoder 10sw + decoder 8s) ---
+    ap.add_argument('--enc-cfg', default=CFG,
+                    help='config del MAE (p.ej. .../config_rangeview_rect_fold0.py)')
+    ap.add_argument('--enc-ckpt', default=CKPT,
+                    help='checkpoint del MAE (p.ej. work_dirs/rv_rect_fold0/epoch_1000.pth)')
+    ap.add_argument('--dec', default=None,
+                    help='checkpoint del decoder wayformer (default: <out>/decoder_mini.pth)')
+    ap.add_argument('--dec-baseline', default=None,
+                    help='checkpoint del baseline sin escena (default: <out>/decoder_mini_baseline.pth)')
+    ap.add_argument('--n-wp', type=int, default=None,
+                    help='waypoints del horizonte: 2/6/10/16 = 1s/3s/5s/8s. '
+                         'DEBE coincidir con el horizonte del decoder entrenado.')
     args = ap.parse_args()
     dev = 'cuda'
 
+    # El horizonte se fija ANTES de construir samples y modelos: build_sample y
+    # head_traj leen el global N_WP del modulo (mismo mecanismo que train_decoder).
+    if args.n_wp is not None:
+        tdm.N_WP = args.n_wp
+    print(f'[cfg] encoder {args.enc_ckpt}')
+    print(f'[cfg] horizonte {tdm.N_WP} wp = {tdm.N_WP * 0.5:.1f}s')
+
     init_default_scope('mmpretrain')
-    cfg = Config.fromfile(CFG)
+    cfg = Config.fromfile(args.enc_cfg)
     mae = MODELS.build({**cfg.model, 'data_preprocessor': cfg.data_preprocessor})
-    mae.load_state_dict(torch.load(CKPT, map_location='cpu').get('state_dict'),
+    mae.load_state_dict(torch.load(args.enc_ckpt, map_location='cpu').get('state_dict'),
                         strict=False)
     encoder = mae.backbone.to(dev)
     encoder.eval()
     model = MiniWayformerDecoder().to(dev)
     # strict=False: checkpoints previos a t_emb (que inicia en 0 = sin efecto)
-    model.load_state_dict(torch.load(f'{args.out}/decoder_mini.pth',
-                                     map_location=dev), strict=False)
+    dec_path = args.dec or f'{args.out}/decoder_mini.pth'
+    print(f'[cfg] decoder {dec_path}')
+    model.load_state_dict(torch.load(dec_path, map_location=dev), strict=False)
     model.eval()
     base = None
-    bpath = f'{args.out}/decoder_mini_baseline.pth'
+    bpath = args.dec_baseline or f'{args.out}/decoder_mini_baseline.pth'
     if os.path.exists(bpath):
         base = MiniBaseline().to(dev)
         base.load_state_dict(torch.load(bpath, map_location=dev), strict=False)

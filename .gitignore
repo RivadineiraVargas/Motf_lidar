@@ -56,3 +56,4 @@ sapiens/pretrain/bev_trajectories_*.png
 .DS_Store
 sapiens/pretrain/Motf_lidar/
 sapiens/pretrain/trajectory.txt
+predictions_global_*.txt
