@@ -448,17 +448,27 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
         if grad else
         [encode_one_live(encoder, sc, max(t - i, 0), dev).detach() for i in range(hist)])
 
-    model = {'wayformer': MiniWayformerDecoder,
-             'wayformer_pooled': MiniWayformerPooled,
-             'wayformer_gated': MiniWayformerGated,
-             'baseline': MiniBaseline}[arch]().to(dev)
+    # arch 'gatefix<v>' (p.ej. gatefix0.10) = MiniWayformerGated con el gate
+    # CONGELADO en v, para barrer cuanta escena conviene dejar entrar en vez de
+    # dejar que el modelo lo aprenda. gatefix0.0 debe reproducir el baseline
+    # (control interno del barrido); gatefix1.0 = escena a fuerza completa.
+    if arch.startswith('gatefix'):
+        gate_v = float(arch[len('gatefix'):])
+        model = MiniWayformerGated(gate_init=gate_v).to(dev)
+        model.scene_gate.requires_grad_(False)      # congelado: no se aprende
+    else:
+        model = {'wayformer': MiniWayformerDecoder,
+                 'wayformer_pooled': MiniWayformerPooled,
+                 'wayformer_gated': MiniWayformerGated,
+                 'baseline': MiniBaseline}[arch]().to(dev)
     gate_of = (lambda: float(torch.tanh(model.scene_gate).item())) \
         if hasattr(model, 'scene_gate') else (lambda: None)
     best_ade, best_ep = float('inf'), 0
     suffix = '' if arch == 'wayformer' else f'_{arch}'
     best_path = f'{out_dir}/decoder_mini{suffix}.pth'
     best_metrics = None
-    param_groups = [{'params': model.parameters(), 'lr': lr}]
+    param_groups = [{'params': [q for q in model.parameters() if q.requires_grad],
+                     'lr': lr}]
     if finetuning:
         enc_params = [p for p in encoder.parameters() if p.requires_grad]
         param_groups.append({'params': enc_params, 'lr': enc_lr})

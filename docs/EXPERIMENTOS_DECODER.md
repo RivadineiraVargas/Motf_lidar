@@ -796,3 +796,107 @@ superior; ver exp. de contrato de datos en CHECKLIST_CLAUDINE.md. El viewer lee
 
 GIFs por escena en `work_dirs/sim_dominio_fold0_3s/` (split donde la escena
 ayudaba) y `work_dirs/sim_dominio_fold3_3s/` (split adversarial).
+
+---
+
+## Experimento 14: barrido de gate CONGELADO — el control que faltaba desde el principio
+
+**Fecha:** 2026-08-18/19. **Script:** `run_gate_sweep.sh` (arch `gatefix<v>` en
+`train_decoder_mini.py`: `MiniWayformerGated` con `scene_gate` congelado en v).
+
+**Hipótesis:** el exp. 12 mostró que el gate aprendido converge a 0.0968 ± 0.0135
+en los 5 folds, pero eso solo dice DÓNDE aterriza el modelo, no si ese punto es
+bueno. Congelando el gate en valores fijos se construye la curva ADE vs
+cantidad-de-escena, que responde la pregunta de la tesis como curva y no como
+sí/no. `gatefix0.0` (escena anulada) debía reproducir el baseline: control interno.
+
+**Diseño:** 6 valores (0.0 / 0.05 / 0.1 / 0.2 / 0.5 / 0.99) × 8 semillas × folds
+0 y 3 (los dos extremos: la escena "ayudaba" −20.4% / "dañaba" +40.0%). 96
+corridas, ~10 h. Features cacheadas.
+
+**Resultado 1 — la curva es PLANA:**
+
+| gate | fold 0 ADE | vs gate=0 | fold 3 ADE | vs gate=0 |
+|---|---|---|---|---|
+| 0.0 | 0.782 ± 0.027 | — | 2.001 ± 0.156 | — |
+| 0.05 | 0.773 ± 0.038 | −0.009 (t=−1.58) | 2.134 ± 0.037 | +0.133 (t=+2.13) |
+| 0.1 | 0.776 ± 0.031 | −0.007 (t=−1.25) | 2.019 ± 0.181 | +0.018 (t=+0.23) |
+| 0.2 | 0.775 ± 0.032 | −0.007 (t=−1.32) | 2.120 ± 0.115 | +0.119 (t=+1.89) |
+| 0.5 | 0.747 ± 0.045 | −0.035 (t=−2.23) | 2.165 ± 0.020 | +0.163 (t=+2.76) |
+| 0.99 | 0.761 ± 0.053 | −0.021 (t=−1.42) | 2.048 ± 0.142 | +0.046 (t=+0.53) |
+
+De 0% a 99% de escena el ADE no se mueve fuera del ruido. Única celda
+significativa: fold 3 gate 0.5 (t=+2.76) — pero (a) va en contra de la escena,
+(b) es 1 de 10 comparaciones, exactamente lo que el azar predice al 5%, y (c) no
+es monótona (0.5 significativo y 0.99 no). **No hay relación dosis-respuesta.**
+
+**Resultado 2 — EL CONTROL FALLA, y ahí está el hallazgo:**
+
+`gatefix0.0` NO reproduce el baseline. Y no por un bug: `MiniBaseline` procesa
+cada objeto con un MLP **independiente**, mientras que el modelo gated conserva
+**self-attention ENTRE objetos**, 2 capas y FFN. La comparación
+"wayformer vs baseline" que sostuvo el proyecto entero nunca midió la escena:
+medía escena + capacidad del decoder + interacción entre agentes, todo junto.
+
+Descomposición (8 semillas):
+
+| componente | fold 0 | fold 3 |
+|---|---|---|
+| **arquitectura** (gatefix0.0 vs baseline, SIN escena) | **−0.129** t=−9.19 8/8 | **+0.578** t=+9.15 0/8 |
+| **escena** (gate aprendido vs gate 0, misma arq.) | −0.023 t=−1.80 (ns) | +0.121 t=+1.91 (ns) |
+| total reportado históricamente | −0.186 t=−5.94 | +0.570 t=+12.40 |
+
+La arquitectura explica el **69%** del efecto en el fold 0 y el **101%** en el
+fold 3. Lo que queda para la escena no es significativo en ninguno de los dos.
+
+**Diagnóstico:**
+
+1. **La escena LiDAR no aporta nada**, con ningún encoder, ningún puente, ningún
+   horizonte y ahora tampoco con ninguna DOSIS. Medido con el control correcto
+   (misma arquitectura, escena apagada) y a lo largo de toda la curva.
+2. **Lo que dependía del split nunca fue la escena: era la ARQUITECTURA.** Un
+   decoder transformer de 2 capas con atención entre objetos, entrenado con 20
+   escenas, gana 14% en un split y pierde 39% en otro. Eso explica de una vez el
+   enigma que arrastraba el proyecto desde el exp. 8, y es coherente con que en
+   el fold 3 `best_ep`=1 casi siempre: el modelo grande sobreajusta desde la
+   primera época.
+3. **Reencuadre de la tesis.** La pregunta deja de ser "¿la escena ayuda?" (no) y
+   pasa a ser una crítica metodológica con evidencia: *con 25 escenas la
+   capacidad del decoder domina cualquier efecto de las features de escena, y la
+   comparación estándar "con LiDAR vs baseline simple" está confundida con
+   capacidad del modelo*. Aplica a cualquier trabajo que compare así sin
+   controlar arquitectura.
+4. **Retractación:** el 18/08 se propuso el −0.129 del fold 0 como resultado
+   positivo ("la atención entre objetos ayuda un 14%"). El fold 3 lo revierte
+   (+0.578). También depende del split; no es un hallazgo.
+
+**Reproducir:**
+```
+bash run_gate_sweep.sh
+```
+
+---
+
+## Latencia de inferencia (puente a la etapa 2: el vehículo del LCAD)
+
+**Script:** `latency_benchmark.py`. GPU: RTX 4060 Laptop.
+
+| etapa | fp32 | autocast fp16 |
+|---|---|---|
+| encoder MAE (forward, 1 sweep) | 139.0 ms | **26.4 ms** (×5.3) |
+| decoder (K slots) | 2.6 ms | — |
+| **total cómputo** | **141.6 ms → 7.1 Hz** | **~29 ms → ~34 Hz** |
+
+(+31.9 ms de lectura del .npy, que en el vehículo se reemplaza por la extracción
+real del sweep.) A 10 Hz el presupuesto es 100 ms: en fp32 **no entra**, con
+precisión mixta entra con 3× de margen y el error numérico es 0.046%.
+El encoder es el **98%** del cómputo: cualquier optimización va ahí.
+
+**TRAMPA ENCONTRADA AL VALIDAR fp16:** el encoder NO es determinista — dos
+llamadas fp32 con la misma entrada dan 69.3% de error relativo elementwise. Con
+`torch.manual_seed` fijado da 0.000%. Es una PERMUTACIÓN del mismo conjunto de
+tokens (máx. 1.5e-5 en las sumas por token ordenadas), inocua porque la
+cross-attention es invariante al orden de la memoria. Pero invalida cualquier
+comparación elementwise de salidas del encoder sin fijar semilla: sin ese
+control, fp16 parecía romper el modelo (70% de error) cuando en realidad su
+error es 0.046%.
