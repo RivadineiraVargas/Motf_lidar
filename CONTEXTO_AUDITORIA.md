@@ -5,19 +5,80 @@
 
 ---
 
-## 0. Qué se te pide
+## 0. INSTRUCCIONES PARA EL AGENTE AUDITOR
 
-Auditar este trabajo **buscando errores**. No se busca validación: se busca que
-encuentres lo que está mal, lo que no se sostiene, y lo que se afirmó con más
-confianza de la que la evidencia permite.
+### Tu tarea
 
-Este documento lo escribió el asistente que hizo el trabajo. Está sesgado por
-construcción. **Desconfía especialmente de las secciones donde suena convencido.**
-La §7 lista dónde creo que están los puntos débiles — pero el hecho de que yo los
-haya listado no significa que sean los únicos ni los peores.
+Auditar este trabajo **buscando errores**. No se busca validación ni un resumen: se
+busca que encuentres lo que está mal, lo que no se sostiene, y lo que se afirmó con
+más confianza de la que la evidencia permite.
 
-Lenguaje del proyecto: español (el usuario es hispanohablante; la documentación
-técnica mezcla español e inglés).
+Este documento lo escribió el asistente que hizo el trabajo. **Está sesgado por
+construcción.** Desconfía especialmente de las secciones donde suena convencido. La §7
+lista los puntos débiles que ese asistente identifica en sí mismo — úsala como punto de
+partida, no como el alcance de tu revisión. Que los haya listado no significa que sean
+los únicos ni los peores, y admitir una debilidad no la neutraliza.
+
+### Orden de trabajo sugerido (de mayor a menor rendimiento)
+
+1. **Recalcular la estadística desde los CSV crudos.** Es lo más barato y lo más
+   probable que rinda. Los 405 registros están en `sapiens/pretrain/work_dirs/*/[a-z]*results*.csv`
+   (columnas: `fold,seed,arch,horizon_s,n_wp,ade,fde,acc,best_ep`). Verificá cada media,
+   cada desvío, cada t y cada intervalo de confianza de las §3 y §4. No necesitás GPU.
+2. **Revisar la lógica de los tests.** ¿Están bien pareadas las comparaciones? ¿El n es
+   el que se declara? ¿Se mezclan poblaciones (objetos parados vs móviles)? ¿Hay
+   comparaciones múltiples sin corregir? ¿Se usan los grados de libertad correctos?
+3. **Leer el código de los modelos** (`train_decoder_mini.py`) contra lo que la §3.2
+   afirma sobre ellos. El hallazgo principal del proyecto es una afirmación sobre
+   *diferencias arquitectónicas* entre `MiniBaseline` y `MiniWayformerGated`:
+   verificá que sea cierta y completa.
+4. **Buscar fuga de datos.** Cada encoder de dominio se pre-entrenó en las 20 escenas
+   de train de SU fold. Verificá en los CSV que ninguna corrida use un encoder fuera de
+   su fold.
+5. **Contrastar las conclusiones con los datos.** ¿La §3.3 dice más de lo que las
+   tablas permiten? ¿Hay saltos de "no significativo" a "no hay efecto"?
+6. **Recién al final**, si hace falta y tenés los datos, re-correr algo (§8).
+
+### Qué cuenta como hallazgo
+
+- Un número mal calculado, un test mal aplicado, un n mal declarado.
+- Una conclusión que la evidencia no sostiene, o que sobre-generaliza.
+- Un confundido no controlado (el proyecto ya encontró uno grave; puede haber más).
+- Fuga de datos, o un control que no controla lo que dice controlar.
+- Código que no hace lo que la documentación afirma que hace.
+
+### Qué NO cuenta
+
+- **Diferencias en los decimales al reproducir.** El pipeline tiene no-determinismo de
+  GPU documentado (la misma configuración dio 2.79 y 2.51). Una desviación solo es
+  hallazgo si **cambia una conclusión**; reportala indicando el n que usaste.
+- Preferencias de estilo, de nomenclatura o de organización del código.
+- Que el resultado sea negativo. Un negativo bien medido es un resultado válido; lo
+  auditable es si está bien medido.
+
+### Cómo reportar
+
+Por cada hallazgo: **qué afirmación es**, **dónde está** (archivo y sección o línea),
+**por qué está mal**, **qué evidencia lo demuestra**, y **cuán grave es** — distinguí
+entre "cambia la conclusión principal", "cambia un resultado secundario" y "es
+impreciso pero no cambia nada".
+
+Si no encontrás errores en algo que revisaste a fondo, decilo explícitamente: saber qué
+fue verificado y resistió es tan útil como la lista de fallas.
+
+### Permiso explícito
+
+Podés cuestionar el encuadre mismo. Si te parece que la pregunta de investigación está
+mal planteada, que el reencuadre de la §3.3 es una racionalización de un fracaso, o que
+todo el enfoque tiene un problema anterior a los números — decilo. Eso es lo más valioso
+que podrías aportar y es exactamente lo que el autor no puede ver.
+
+Lenguaje del proyecto: español (la documentación técnica mezcla español e inglés).
+
+**Aviso de nombres:** este archivo es `CONTEXTO_AUDITORIA.md`. Existe además un
+`Contexto.md` en la raíz, de junio, en portugués, que documenta el pipeline VIEJO de
+vóxeles (Fase 1) y **está desactualizado** — no lo uses como referencia del estado
+actual, aunque sí es contexto histórico legítimo (ver §11 sobre Fase 1).
 
 ---
 
