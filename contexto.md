@@ -1,6 +1,6 @@
 # CONTEXTO — briefing para auditoría independiente del proyecto MOTF
 
-**Fecha:** 2026-08-19 · **Rama:** `encoder/validacao-mae` · **Commit:** ver `git log -1`
+**Fecha:** 2026-08-23 · **Rama:** `encoder/validacao-mae` · **Commit:** ver `git log -1`
 **Repo:** https://github.com/RivadineiraVargas/Motf_lidar
 
 ---
@@ -279,12 +279,55 @@ python angular_error_analysis.py    # exp. 13
 python latency_benchmark.py         # §5
 ```
 
-**Lo que NO está en el repo** (gitignored por tamaño, ~10 GB): los datos
-`waymo_clean/` (8.2 G), los checkpoints de los encoders
-`work_dirs/rv_rect_fold{0..4}/epoch_1000.pth` (~176 MB c/u), las features cacheadas
-(2.7 G por fold) y los GIFs de simulación. **Sí están** los CSV de resultados
-(32 KB), todo el código, y toda la documentación. Una auditoría de los números y del
-razonamiento es posible sin la GPU; re-correr los experimentos no.
+### Qué está en el repo y qué no
+
+**En el repo (suficiente para auditar números y razonamiento, sin GPU):** todo el
+código, toda la documentación, y **los CSV crudos de todos los experimentos**
+(`work_dirs/*/[a-z]*results*.csv`, 32 KB, 405 filas). Con eso se puede recalcular
+cada media, cada t-test y cada intervalo de confianza de este documento de forma
+independiente. **Esa es la vía recomendada para la auditoría.**
+
+**Fuera del repo, en un paquete aparte (~1 GB, pedir al usuario el enlace de Drive):**
+
+| archivo | contenido | tamaño |
+|---|---|---|
+| `motf_datos.tgz` | `waymo_clean/{objs_bbox, range_files, poses, beam_inclinations.npy}` | ver `SHA256SUMS.txt` |
+| `motf_encoders.tgz` | los 5 encoders de dominio `rv_rect_fold{0..4}/epoch_1000.pth` | 712 MB |
+| `SHA256SUMS.txt` | checksums — verificar antes de reproducir | — |
+
+```
+280a58c490a3dcfd4a59f0c4d63d508ca6219818c28bb0c60971c14f33ab14eb  motf_datos.tgz   (239 MB)
+80de4e2452f12d2fdfecad8919dfa0ab8a5cdc62899054c3e9194b022a037eb3  motf_encoders.tgz (712 MB)
+```
+
+Se descomprimen desde la raíz del repo (`tar xzf motf_datos.tgz`) y reconstruyen la
+estructura de directorios esperada. Solo hacen falta si querés **re-entrenar** para
+confirmar que los CSV no están inventados.
+
+**AVISO:** `objs_bbox` son 1.546.555 archivos de ~280 bytes. Al descomprimir ocupa
+**6,1 GB en disco** aunque su contenido real sean 591 MB — es overhead de bloques del
+sistema de archivos, no un error. Descomprimir tarda varios minutos.
+
+**Sobre el conteo de escenas (no es un error):** `objs_bbox` y `poses` traen **492
+escenas**, pero `range_files` solo **25**. Las etiquetas de trayectoria son livianas y
+existen para muchas escenas; el LiDAR es lo pesado y solo se descargó para 25. **Los
+experimentos usan las 25 que tienen LiDAR** — son las que enumera `make_folds()` en
+`cross_validate_decoder.py`. El resto de las etiquetas es material sobrante de la
+extracción.
+
+**Sobre reproducir: los decimales NO van a coincidir.** El pipeline tiene
+no-determinismo de GPU documentado en las operaciones de atención — la misma
+configuración dio 2.79 y 2.51 en los exp. 4 y 5. Re-correr un fold dará números
+*parecidos* pero no idénticos a los de los CSV. **"No me dio exactamente igual" no es
+evidencia de error ni de fraude.** Lo que debe coincidir son las conclusiones (signos,
+significancia, orden de magnitud), no las cifras. Si algo se aparta lo bastante como
+para cambiar una conclusión, eso sí es un hallazgo — repórtalo con el n usado.
+
+**Deliberadamente NO se distribuye:** las features cacheadas
+(`work_dirs/cache_fold*_domain`, 14 GB) porque son exactamente la salida del encoder
+sobre los `range_files` y se regeneran solas al correr cualquier experimento; los
+`bin_files` y `range_png_rect` (no los usa el pipeline del decoder); y los GIFs de
+simulación.
 
 ---
 
