@@ -110,7 +110,21 @@ class MAEPretrainDecoder(BaseModule):
             grid,
             self.decoder_pos_embed.shape[-1],
             cls_token=True)
-        self.decoder_pos_embed.data.copy_(decoder_pos_embed.float())
+        # Solo si la grilla es REALMENTE 2D y cuadra con el tensor. El MAE 4D de
+        # vóxeles (Fase 1) tiene 300 tokens que no forman un cuadrado: el sincos
+        # 2D da 17*17+1=290 contra 301 y rompía. Esta inicialización se agregó en
+        # e600dea (07/07) para el MAE rectangular de range-view; el encoder 4D se
+        # entrenó el 15/06, ANTES, o sea sin ella. Saltearla acá restaura ese
+        # comportamiento — necesario para que los encoders por fold de la CV sean
+        # comparables con el original — y conserva el fix donde sí aplica.
+        if decoder_pos_embed.shape == self.decoder_pos_embed.shape:
+            self.decoder_pos_embed.data.copy_(decoder_pos_embed.float())
+        else:
+            from mmengine.logging import MMLogger
+            MMLogger.get_current_instance().info(
+                f'[mae_neck] pos-embed 2D {tuple(decoder_pos_embed.shape)} no '
+                f'coincide con {tuple(self.decoder_pos_embed.shape)} (grilla no '
+                f'cuadrada, p.ej. vóxeles 4D): se deja aprendible.')
 
         torch.nn.init.normal_(self.mask_token, std=.02)
 

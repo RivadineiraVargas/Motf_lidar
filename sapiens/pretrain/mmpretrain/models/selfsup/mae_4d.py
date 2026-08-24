@@ -15,9 +15,12 @@ class MAE4D(MAE):
             inputs = inputs['inputs']
 
         if mode == 'loss':
-            losses_dict = super().loss(inputs, data_samples)
-            # mae.py train_step espera tupla (losses_dict, preds, masks)
-            vis = getattr(self, '_vis_data', (None, None))
-            return losses_dict, vis[0], vis[1]
+            # Devuelve SOLO el dict de pérdidas. Antes retornaba la tupla
+            # (losses_dict, pred, mask) porque el train_step viejo la esperaba;
+            # el refactor de e600dea (07/07) lo cambió a recibir solo el dict y
+            # tomar la visualización de self._vis_data, que MAE.loss() ya deja
+            # puesta. Esta clase quedó con el contrato viejo y rompía con
+            # "'tuple' object has no attribute 'items'" en parse_losses.
+            return super().loss(inputs, data_samples)
         else:
             return super().forward(inputs, data_samples, mode=mode, **kwargs)

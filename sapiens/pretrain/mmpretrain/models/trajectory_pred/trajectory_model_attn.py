@@ -17,6 +17,7 @@ class TrajectoryModelWithAttention(BaseModel):
                  freeze_encoder=False,
                  use_gate=True,
                  gate_init=0.0,
+                 freeze_gate=False,
                  predict_uncertainty=False,
                  **kwargs):
         super().__init__(**kwargs)
@@ -47,6 +48,16 @@ class TrajectoryModelWithAttention(BaseModel):
         # tanh(scene_gate_init) = gate_init.
         gate_init = float(max(min(gate_init, 0.99), -0.99))
         self.scene_gate = nn.Parameter(torch.atanh(torch.tensor([gate_init])))
+        # freeze_gate=True -> el gate NO se aprende, queda clavado en gate_init.
+        # Con gate_init=0.0 esto da el CONTROL DE ARQUITECTURA: la rama de escena
+        # aporta exactamente 0, pero el modelo conserva cross_attn, scene_proj,
+        # scene_norm y el mismo decoder. Comparar contra el baseline MLP mide
+        # CAPACIDAD; comparar el gated contra este mide ESCENA. En la Fase 2 la
+        # ausencia de este control confundió ambas cosas durante 14 experimentos
+        # (ver docs/EXPERIMENTOS_DECODER.md, exp. 14).
+        self.freeze_gate = freeze_gate
+        if freeze_gate:
+            self.scene_gate.requires_grad_(False)
 
         # predict_uncertainty=True -> el decoder predice media Y log-varianza por
         # cada coordenada (incerteza aleatoria). El PDF la pide: covarianza por pose
