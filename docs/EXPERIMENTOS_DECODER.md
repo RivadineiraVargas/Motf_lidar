@@ -900,3 +900,87 @@ cross-attention es invariante al orden de la memoria. Pero invalida cualquier
 comparación elementwise de salidas del encoder sin fijar semilla: sin ese
 control, fp16 parecía romper el modelo (70% de error) cuando en realidad su
 error es 0.046%.
+
+---
+
+## Experimento 15: vuelta a Fase 1 (10 escenas) + dos bugs de datos
+
+**Fechas:** 2026-08-23/26. **Scripts:** `run_fase1_seeds.sh`, `run_fase1_cv.sh`,
+`run_rv_fold0.sh`, `run_rv_aug_fold0.sh`, `run_reeval_windows.sh`,
+`run_reeval_sinclip.sh`, `run_noclip.sh`, `run_diagnostico.sh`.
+
+**Contexto:** los exp. 1-14 usaron el pipeline de range-view a 25 escenas, donde
+la escena es UN SOLO barrido. Fase 1 (10 escenas) tiene escena TEMPORAL —5
+barridos— en las dos representaciones. Se volvió a esa escala con el control de
+arquitectura del exp. 14 (`gate0`: mismo modelo, gate congelado en 0) y
+evaluando en ÉPOCA FIJA (sin el sesgo de selección H1 de la auditoría).
+
+### Resultado 1 — el efecto depende del tamaño del test
+
+| representación | test | escena (gated − gate0) | t | |
+|---|---|---|---|---|
+| vóxeles | 51 | −0.170 (−9.5%) | −2.91 | sig |
+| vóxeles | 319 | −0.049 (−3.2%) | −1.18 | ns |
+| range-view | 51 | −0.273 (−14.2%) | −2.51 | sig |
+| range-view | 319 | −0.060 (−3.7%) | −0.72 | ns |
+
+Las dos representaciones convergen a **~−3%** al ampliar el test de 1 a 7
+ventanas temporales por objeto. Que dos pipelines independientes aterricen en el
+mismo valor es la señal más fuerte de que ése es el efecto real.
+
+### Resultado 2 — vóxeles y range-view EMPATAN
+
+ADE del mejor modelo: 1.45 vs 1.56 (con recorte), 13.19 vs 13.29 (sin recorte).
+La ventaja histórica de los vóxeles (1.303 vs 1.685 en `RESULTADOS_ADE_FDE.md`)
+era **augmentación de datos**, no representación: el config de range-view no
+tenía `augment=True`. Al igualarla, la brecha desaparece. **Responde la Sec. 6
+del plan de Claudine**, que pedía comparar representaciones.
+
+### BUG A — el objetivo estaba recortado (crítico)
+
+`trajectory_dataset.py` y `range_view.py` (cada uno con su propio `__getitem__`)
+normalizan con media y desvío del **histórico** (5 puntos, ~0.5 s) y aplican ese
+desvío también al **futuro** (3 s, decenas de metros), con clip a ±5 → ≈±2.5 m.
+
+- **32%** de los valores del futuro se recortaban; del histórico, **0%**.
+- Verificado: el objetivo real supera 5 en el **92%** de las muestras, pero el
+  modelo predice >5 en solo el **27%** → subpredice el movimiento por ~4x, y no
+  puede evitarlo: nunca vio un ejemplo mayor.
+- **Todos los ADE de la documentación (~1.4 m) son ~10x optimistas.** Sin recorte
+  son ~13 m.
+- Las COMPARACIONES entre modelos siguen válidas: los tres comparten el objetivo.
+
+Sin recorte, la escena pasa a ser significativa en ambas representaciones
+(−0.417 t=−2.94 y −0.481 t=−2.92, 7/8 semillas) — pero el efecto RELATIVO sigue
+siendo ~3%. No cambió el efecto, cambió la potencia para detectarlo.
+El "castigo por capacidad" (gate0 peor que baseline) **desaparece** sin recorte:
+era un artefacto del truncamiento.
+
+### BUG B — la normalización es la causa raíz
+
+Quitar el clip sin más deja valores de hasta 28 y el entrenamiento se vuelve
+**inestable** (pérdida 36.8 → 10.9 → 16.8) y **11x más lento** (4.92 s/paso
+contra 0.45). Probado con clip=50, que no recorta nada real: igual de lento → no
+es el clip, es la magnitud de los valores.
+
+FIX disponible: parámetros `clip_norm` (None desactiva) y `norm_scale` (escala
+fija en metros) en ambos datasets. **El default preserva el comportamiento
+anterior**, así que los checkpoints existentes siguen siendo válidos.
+`run_diagnostico.sh` compara la normalización por histórico contra escala fija.
+
+### Coordenadas: los datos están en el marco del EGO
+
+`trajectory_dataset.py:124` transforma cada centro con `inv(pose)` de SU propio
+frame. Un objeto parado "se mueve" a la velocidad del ego (58-66 km/h en las 2
+escenas de validación). PERO medido: el ego aporta solo **3-22%** del
+desplazamiento; en coordenadas del mundo los objetos igual se desplazan 26-30 m
+en 3 s. La hipótesis de que "casi todo el movimiento es del ego" quedó
+**refutada**: la tarea es genuinamente difícil. Ego vs mundo queda como decisión
+de diseño abierta.
+
+### Nota operativa — la GPU se cuelga al suspender
+
+El 25/08 a las 18:31 la máquina se suspendió: `Xid 31` + `Xid 154` → *Node Reboot
+Required*. El proceso quedó vivo pero congelado en la época 7, sin escribir al
+log durante 14 h. Es la **segunda vez** (la primera, 08/08). Si un entrenamiento
+largo deja de escribir, revisar `dmesg | grep -i xid` antes de asumir que avanza.

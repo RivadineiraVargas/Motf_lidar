@@ -25,7 +25,7 @@ PATCH     = 16     # parche 16x16
 MAX_RANGE = 75.0   # normalización del canal de rango
 
 
-def load_range_stack(range_dir, history_len, az_shift=0):
+def load_range_stack(range_dir, history_len, az_shift=0, t0=0):
     """Carrega history_len frames de range-view e devolve tokens (num_patches, patch_dim).
     Canal usado: rango (normalizado). Frames empilhados como canais (tempo).
 
@@ -33,7 +33,9 @@ def load_range_stack(range_dir, history_len, az_shift=0):
     em torno do yaw = rotação de θ = -az_shift·(2π/W_NATIVE). A trajetória DEVE
     rodar por θ de forma consistente (ver __getitem__). Sinal validado por IoU."""
     chans = []
-    for t in range(history_len):
+    # t0: frame inicial de la ventana. Debe coincidir con el 't_start' de la
+    # trayectoria, si no la escena y el histórico quedan desalineados.
+    for t in range(t0, t0 + history_len):
         ri = np.load(os.path.join(range_dir, f'{t}.npy'))   # (64, 2650, 2)
         if az_shift:
             ri = np.roll(ri, az_shift, axis=1)              # roll nativo (360° wrap)
@@ -178,14 +180,22 @@ class RangeViewTrajectoryDataset(TrajectoryDataset):
         history_rel = relative[:self.history_len]
         mean_rel = history_rel.mean(axis=0)
         std_rel = np.maximum(history_rel.std(axis=0), 0.5)
-        relative_norm = np.clip((relative - mean_rel) / std_rel, -5.0, 5.0)
+        # Mismo recorte que TrajectoryDataset (ver nota allí): ±5 desvíos del
+        # histórico ≈ ±2.5 m, mientras que en coordenadas relativas al ego los
+        # objetos se desplazan ~40 m en 3 s. clip_norm=None lo desactiva.
+        if getattr(self, 'norm_scale', None) is not None:
+            std_rel = np.full(3, float(self.norm_scale))
+        relative_norm = (relative - mean_rel) / std_rel
+        if getattr(self, 'clip_norm', 5.0) is not None:
+            relative_norm = np.clip(relative_norm, -self.clip_norm, self.clip_norm)
         obj_history_flat = relative_norm[:self.history_len].reshape(-1).astype(np.float32)
         obj_future_flat = relative_norm[
             self.history_len:self.history_len + self.pred_len].reshape(-1).astype(np.float32)
 
         # --- cena: range-view em tokens (rodada por az_shift, consistente) ---
         range_dir = os.path.join(self.data_root, 'range_files', scene)
-        tokens = load_range_stack(range_dir, self.history_len, az_shift=az_shift)
+        tokens = load_range_stack(range_dir, self.history_len, az_shift=az_shift,
+                                  t0=item.get('t_start', 0))
 
         return {
             'inputs': torch.from_numpy(tokens).float(),

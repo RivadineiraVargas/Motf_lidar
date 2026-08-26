@@ -21,7 +21,13 @@ class TrajectoryDataset(BaseDataset):
                  max_jump=5.0,
                  scenes=None,
                  augment=False,
+                 eval_windows=1,
+                 clip_norm=5.0,
+                 norm_scale=None,
                  **kwargs):
+        self.clip_norm = clip_norm
+        self.norm_scale = norm_scale
+        self.eval_windows = eval_windows   # antes de super(): full_init() ya llama load_data_list
         self.sequence_len = sequence_len
         self.history_len = history_len
         self.pred_len = pred_len
@@ -143,11 +149,24 @@ class TrajectoryDataset(BaseDataset):
                     n_dropped += 1
                     continue
 
-                data_list.append({
-                    'scene_name': scene,
-                    'object_id':  obj_id,
-                    'centers':    centers[:self.sequence_len],
-                })
+                # eval_windows: cuántas ventanas temporales por objeto. 1 (default)
+                # reproduce el comportamiento histórico —una sola ventana desde el
+                # frame 0—, que es con el que se entrenaron todos los checkpoints.
+                # >1 se usa SOLO en evaluación: multiplica el conjunto de test sin
+                # reentrenar. El tope real lo pone el LiDAR (11 sweeps): la ventana
+                # necesita history_len frames de escena, así que t_start llega
+                # hasta n_lidar - history_len.
+                n_lidar = getattr(self, 'n_lidar_frames', 11)
+                max_start = max(0, min(self.eval_windows - 1,
+                                       n_lidar - self.history_len,
+                                       len(centers) - self.sequence_len))
+                for t_start in range(max_start + 1):
+                    data_list.append({
+                        'scene_name': scene,
+                        'object_id':  obj_id,
+                        't_start':    t_start,
+                        'centers':    centers[t_start:t_start + self.sequence_len],
+                    })
 
             if n_dropped:
                 print(f'[TrajectoryDataset] cena {scene}: {n_dropped} tracks '
@@ -232,7 +251,9 @@ class TrajectoryDataset(BaseDataset):
         # Tokens de cena (cargar antes de augmentación para rotar consistentemente)
         scene_bin = os.path.join(self.data_root, 'bin_files', scene)
         voxel_sequences = []
-        for i in range(self.history_len):
+        # t_start alinea la escena con la ventana de trayectoria (ver eval_windows)
+        t0 = item.get('t_start', 0)
+        for i in range(t0, t0 + self.history_len):
             points = self.load_bin(os.path.join(scene_bin, f"{i}.bin"))
             grid   = self.point_cloud_to_voxel_grid(points)
             voxel_sequences.append(grid)
@@ -243,11 +264,31 @@ class TrajectoryDataset(BaseDataset):
 
         # Normalizar só com o histórico (sem data leakage).
         # std mínimo 0.5m para evitar escala explosiva em objetos quase estáticos.
-        # Clip a [-5, 5] para descartar tracks fora do range do sensor.
+        # Normalización con media/desvío del HISTÓRICO (5 puntos, ~0.5 s).
+        # OJO: como std_rel tiene piso 0.5, el clip a ±5 equivale a ±2.5 m desde
+        # el centro del histórico — pero los objetos se desplazan ~8.8 m en 3 s.
+        # Resultado: el 32% de los valores del FUTURO se recortan (el histórico,
+        # 0%). Eso trunca el objetivo justo en los objetos que más se mueven y
+        # vuelve OPTIMISTAS los ADE absolutos. Las comparaciones entre modelos no
+        # se ven afectadas (todos comparten el mismo objetivo recortado).
+        # clip_norm=None desactiva el recorte: se usa en EVALUACIÓN para medir el
+        # error real contra la trayectoria completa.
         history_rel = relative[:self.history_len]
         mean_rel    = history_rel.mean(axis=0)
-        std_rel     = np.maximum(history_rel.std(axis=0), 0.5)
-        relative_norm = np.clip((relative - mean_rel) / std_rel, -5.0, 5.0)
+        # norm_scale: escala FIJA en metros para normalizar. El modo histórico
+        # (norm_scale=None) calcula el desvío con los 5 puntos del histórico
+        # (~0.5 s) y lo aplica también al futuro (3 s, decenas de metros): salen
+        # valores de hasta 28 y el entrenamiento se vuelve inestable (pérdida que
+        # oscila 36 -> 11 -> 17) y 11x más lento. El clip a ±5 tapaba eso
+        # truncando el objetivo. Una escala fija acota el rango de salida sin
+        # truncar nada.
+        if self.norm_scale is not None:
+            std_rel = np.full(3, float(self.norm_scale))
+        else:
+            std_rel = np.maximum(history_rel.std(axis=0), 0.5)
+        relative_norm = (relative - mean_rel) / std_rel
+        if self.clip_norm is not None:
+            relative_norm = np.clip(relative_norm, -self.clip_norm, self.clip_norm)
 
         obj_history_flat = relative_norm[:self.history_len].reshape(-1).astype(np.float32)
         obj_future_flat  = relative_norm[
