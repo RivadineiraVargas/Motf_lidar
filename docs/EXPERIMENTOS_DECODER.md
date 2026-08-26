@@ -984,3 +984,61 @@ El 25/08 a las 18:31 la máquina se suspendió: `Xid 31` + `Xid 154` → *Node R
 Required*. El proceso quedó vivo pero congelado en la época 7, sin escribir al
 log durante 14 h. Es la **segunda vez** (la primera, 08/08). Si un entrenamiento
 largo deja de escribir, revisar `dmesg | grep -i xid` antes de asumir que avanza.
+
+---
+
+## Experimento 16: reentrenado SIN recorte y con escala fija — resultado final de Fase 1
+
+**Fecha:** 2026-08-26. **Script:** `run_noclip.sh`, `run_diagnostico.sh`.
+**Datos:** `work_dirs/noclip/noclip_results.csv`.
+
+**Qué cambia respecto del exp. 15:** el objetivo ya no se recorta (`clip_norm=None`)
+y se normaliza con **escala fija de 10 m** (`norm_scale=10.0`) en vez del desvío
+del histórico. Es la primera vez que el modelo aprende la tarea real. Todo lo
+demás idéntico: fold 0, 3 variantes, 8 semillas, época fija 100, test de 319.
+
+**Resultado (8 semillas):**
+
+| variante | ADE | FDE |
+|---|---|---|
+| baseline | 5.07 ± 1.15 m | 10.05 m |
+| **gate0** (arquitectura, sin escena) | **4.57 ± 1.00 m** | **8.99 m** |
+| gated (con escena) | 5.02 ± 0.76 m | 9.51 m |
+
+| comparación | efecto | t | semillas | |
+|---|---|---|---|---|
+| **CAPACIDAD** (gate0 − baseline) | **−10.0%** | −5.35 | **8/8** | **significativo** |
+| ESCENA (gated − gate0) | +9.8% | +1.60 | 1/8 | no significativo |
+
+**Diagnóstico:**
+
+1. **La atención entre objetos es el único componente con efecto demostrado:**
+   −10%, unánime, t=−5.35. Es el resultado más firme del proyecto.
+2. **La escena no aporta.** Apunta a perjudicar pero no alcanza significancia
+   (1/8). Con 5 semillas daba +0.644 (t=+3.94); con 8, +0.450 (t=+1.60) y el
+   desvío se duplicó. **Octava instancia del patrón** de este proyecto: un efecto
+   que parece firme con pocas semillas y se desinfla al completarlas.
+3. **El ADE cae de ~13.5 m a ~4.6 m.** Confirma que el techo estructural del
+   recorte (el modelo no podía predecir >±2.5 m) explicaba la mayor parte del
+   error medido en el exp. 15.
+4. **La lentitud 11x del exp. 15 NO era numérica: era la GPU degradada.** Tras
+   reiniciar, la misma config corre a 0.45 s/paso. El diagnóstico anterior estaba
+   equivocado.
+5. **El diagnóstico de normalización (`run_diagnostico.sh`)** comparó normalizar
+   por histórico contra escala fija, 20 épocas: ambas estables, la fija reduce la
+   pérdida 81% contra 69%. Se eligió la fija por eso y porque elimina el
+   desajuste de calibrar con 0.5 s y aplicar a 3 s.
+
+**CORRECCIÓN IMPORTANTE sobre el número de tokens.** Los experimentos de Fase 1
+NO tienen 6785 tokens de escena: el camino de vóxeles usa **300** y el de
+range-view **128**. Los 6785 son de la Fase 2 (`rv_rect_*`, 25 escenas). Por lo
+tanto **la hipótesis "son demasiados tokens" no explica estos resultados**: las
+representaciones ya son compactas y aun así la escena no aporta. Queda como única
+explicación en pie el **objetivo del pre-entrenamiento** (reconstruir píxeles no
+obliga a codificar movimiento ni geometría útil).
+
+**Comparación con la literatura:** ver `papers/BEVTraj_Kong2025_arXiv-2509.10080.pdf`.
+BEVTraj resuelve el mismo problema sin mapa e iguala o supera a métodos con mapa
+HD (minADE₁₀ 0.905 vs 0.988 de Wayformer). Sus features BEV vienen de **BEVFusion,
+supervisado por detección**, no de un MAE de reconstrucción — que es exactamente
+la diferencia que nuestros experimentos señalan como determinante.

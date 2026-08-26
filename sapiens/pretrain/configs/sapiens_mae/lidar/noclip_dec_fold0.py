@@ -39,7 +39,8 @@ train_dataloader = dict(
         voxel_res=voxel_res,
         spatial_range=spatial_range,
         augment=True,
-        clip_norm=None,   # objetivo COMPLETO (ver hallazgo del 25/08)
+        clip_norm=None,
+        norm_scale=10.0,   # escala FIJA: el modo historico calibra con 0.5 s y se aplica a 3 s
         scenes=[
             '2a81f5233075e987',
             '2e41fe6faf5cd2ea',
