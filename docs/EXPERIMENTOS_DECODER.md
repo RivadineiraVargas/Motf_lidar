@@ -1042,3 +1042,77 @@ BEVTraj resuelve el mismo problema sin mapa e iguala o supera a métodos con map
 HD (minADE₁₀ 0.905 vs 0.988 de Wayformer). Sus features BEV vienen de **BEVFusion,
 supervisado por detección**, no de un MAE de reconstrucción — que es exactamente
 la diferencia que nuestros experimentos señalan como determinante.
+
+---
+
+## Estado al 2026-08-27 — tras la reunión con Claudine
+
+**La reunión salió bien.** Los resultados fueron aceptados. Surgieron tres
+preguntas, respondidas abajo, y quedó un bug reportado.
+
+### Respuestas a las preguntas de la reunión
+
+**¿Entrenamos el decoder?** Sí, es lo único que se entrena. Verificado:
+encoder 302,6 M parámetros con **0 entrenables** (`freeze_encoder=True`);
+decoder 4,89 M, todos entrenables. El encoder se pre-entrena aparte y se congela.
+
+**¿Por qué las escenas son tan cortas?** Límite del dataset, no decisión nuestra:
+11 frames de LiDAR (1,1 s) contra 91 de etiquetas. Cita del paper:
+*"We only release the first 1 second LiDAR data for each scene. This helps reduce
+the 87.9% size of the raw LiDAR data."* **Escenas más largas requieren cambiar de
+dataset** — nuScenes (20 s con LiDAR continuo, el que usa BEVTraj) o Argoverse 2.
+
+**Visualización de un solo objeto:** `viz_un_auto.py` genera `viz_tres_autos.png`
+(tres objetos por percentil de desplazamiento) y `viz_un_auto.png` (caso extremo).
+Muestran que las trayectorias son casi rectas y que **ambos modelos se quedan
+cortos**, cada vez más cuanto más rápido va el objeto.
+
+### BUG PENDIENTE (reportado 27/08, sin diagnosticar)
+
+En el simulador, **la imagen superior (range-view) con los objetos marcados en
+rojo aparecía dañada** durante la reunión. Revisar la proyección de bboxes a la
+range view en `export_decoder_mini_global.py` (método de Gabriel, calibrado con
+`waymo_clean/beam_inclinations.npy`).
+
+### Hallazgo: el encoder se pre-entrenaba con OCHO muestras
+
+`LidarSequenceDataset.load_data_list` devolvía **un ítem por escena**: con 8
+escenas de train, el MAE veía 8 muestras repetidas 1000 épocas, para un ViT de
+302 M. Es probablemente la explicación más simple del resultado negativo.
+Corregido con `max_windows` (8 → 56). Ver commit 99a4239.
+
+### Corrección: el conteo de tokens
+
+Los experimentos de Fase 1 **no** usan 6785 tokens de escena: vóxeles usa **300**
+y range-view **128**. Los 6785 son de Fase 2 (`rv_rect_*`). Por lo tanto *"son
+demasiados tokens"* no explica estos resultados — las representaciones ya son
+compactas y aun así la escena no aporta.
+
+### Sobre Sapiens (verificado)
+
+El paper es arXiv:2408.12569 (Khirodkar et al., Meta 2024): modelo fundacional de
+**visión humana**, 300 M de imágenes de personas. **No existe literatura de
+Sapiens aplicado a LiDAR** (0 resultados en arXiv). Y **no usamos sus pesos** —
+entrenamos desde cero. En la práctica, "adaptar Sapiens" es "usar un ViT de
+302 M": el activo que hace valioso a un modelo fundacional no está en juego.
+Repos completos clonados en `~/referencias/{sapiens_full,sapiens2}`.
+
+### Papers de referencia en `papers/`
+
+| paper | aporte |
+|---|---|
+| WOMD-LiDAR (Chen 2023) | Wayformer+LiDAR: minADE 1,10 → **1,09**. El +2% es en **mAP, no ADE** |
+| BEVTraj (Kong 2025) | map-free iguala a métodos con mapa HD; su BEV es **supervisada por detección** |
+| GeoMAE (Tian 2023) | **+2,7 AP** cambiando el objetivo a targets geométricos; funciona sin datos extra |
+| JointMotion (Wagner 2024) | auto-supervisión para movimiento, pero **0 menciones de LiDAR** (polilíneas) |
+
+### Experimento 17 (en curso): objetivo geométrico
+
+Encoder del fold 0 con objetivo `centroide` + 7 ventanas (56 muestras), pérdida
+con máscara de validez, normalización por magnitud y L1 (ideas de
+`pointmap_l1_loss.py` de Sapiens). Configs `geo_*_fold0.py`, script `run_geo.sh`.
+
+**Señal de alerta:** la pérdida del encoder **no baja** (0,48 → 0,45 en 720
+épocas, oscilando), contra el modo anterior que caía 1,95 → 0,27 en 3 épocas.
+Puede ser tarea irreducible, o que el vóxel de 2 m sea demasiado grande para
+pedir precisión sub-vóxel (GeoMAE usa vóxeles mucho más finos). No esperar mejora.
