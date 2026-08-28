@@ -13,7 +13,7 @@ for S in 0 1 2 3 4 5 6 7; do
       gated)    CFG=$D/noclip_dec_fold0.py;  OPT="model.gate_init=0.5" ;;
     esac
     WD=work_dirs/noclip/${V}_f0s${S}
-    [ -f "$WD/epoch_100.pth" ] || python -u tools/train.py $CFG --work-dir $WD --resume \
+    [ -f "$WD/epoch_100.pth" ] || python -u tools/train.py $CFG --work-dir $WD \
         --cfg-options randomness.seed=$S $OPT > $WD.log 2>&1 || { echo "!!! fallo $V s$S"; continue; }
     python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth --variant $V \
         --seed $S --fold 0 --val-scenes $VAL --eval-windows 7 --sin-clip \
