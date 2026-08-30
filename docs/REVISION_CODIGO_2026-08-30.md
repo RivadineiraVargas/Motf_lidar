@@ -68,9 +68,11 @@ porque, para casi la mitad de los objetos, **era la escena de otro momento**. Es
 mecanismo plausible, no una causa probada: hay que medirlo alineando y repitiendo
 el fold 0.
 
-**Por qué no está arreglado todavía:** hay una CV de 20 h en curso sobre este
-mismo código. Cambiar el alineamiento a mitad haría que los folds 1-4 no fueran
-comparables con el fold 0.
+**ARREGLADO el mismo día.** Se paró la CV que estaba corriendo —97 minutos, no las
+20 h— porque seguir midiendo con la escena equivocada en el 43% de los objetos no
+tenía sentido, y porque arreglar esto invalida igual todos los números previos, el
+del fold 0 incluido. Cada ventana lleva ahora `frame0`, el frame absoluto real.
+Verificado: 0 desalineados. Ver más abajo el efecto medido sobre los conjuntos.
 
 ## 2 — El pos-embed del decoder MAE se queda en ceros
 

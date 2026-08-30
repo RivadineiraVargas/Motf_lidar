@@ -1,5 +1,5 @@
 ---
-last_mapped: 2026-08-30T04:40:00Z
+last_mapped: 2026-08-30T12:35:40Z
 total_files: 177
 total_tokens: 192000
 ---
@@ -97,12 +97,35 @@ De los 59 scripts, **32 están obsoletos**. La tabla completa está más abajo.
 `history_len` frames → `reshape(history_len,-1).T` = **`(300 vóxeles, history_len)`**.
 Cada vóxel espacial es un token y su feature es su secuencia temporal de ocupación.
 
+**Qué frames se cargan — `frame0` vs `t_start`.** `centers` se indexa por **posición
+dentro del track del objeto**: solo contiene los frames donde ese objeto fue
+etiquetado. `frame0` guarda el **frame absoluto** donde arranca la ventana, y es lo
+que `__getitem__` usa para elegir los `.bin` (`trajectory_dataset.py:305`, espejado en
+`range_view.py:198`).
+
+Hasta el 30/08 se usaba el índice del track como si fuera el frame absoluto: un
+objeto que aparecía en el frame 6 recibía la escena de los bins 0..4. **43% de los
+objetos de validación veían la escena de otro momento**, con desfases de hasta 6
+frames sobre 11 disponibles. Es el bug más grave que tuvo el proyecto y la razón de
+que ningún número anterior al 30/08 sea comparable.
+
+**Las tres condiciones para aceptar una ventana** (`trajectory_dataset.py:178-214`):
+
+| condición | qué descarta |
+|---|---|
+| `f0 + history_len <= n_lidar` | ventanas cuya historia se saldría de los sweeps. Es `break`, no `continue`: `frames` está ordenado |
+| contigüidad de **toda** la ventana | huecos de etiquetado, que harían que el "futuro a 3 s" abarcara más tiempo (7,6% de las ventanas) |
+| `max_jump` **por ventana** | tracks corrompidos por el bug de asociación de bboxes por índice |
+
+`n_lidar` se cuenta del disco, no se asume 11: 467 de los 492 directorios de
+`bin_files` están vacíos, así que un typo en `scenes` daría un dataset vacío.
+
 **Flujo de datos — range-view.** `.npy` `(64, 2650, 2)` → roll de azimut si hay
 augmentación → stride 5 y recorte a 512 columnas → normalizar por `MAX_RANGE=75` →
 apilar `history_len` frames como canales → parches 16×16 = **`(128 tokens, 256·history_len)`**.
 
-**Normalización del objetivo** (idéntica en ambos, `trajectory_dataset.py:276-296` y
-`range_view.py:178-193`):
+**Normalización del objetivo** (idéntica en ambos, `trajectory_dataset.py:315-341` y
+`range_view.py:176-193`):
 
 1. `relative = centers - ref_center` (`ref_center` = posición en el primer frame)
 2. `mean_rel`, `std_rel` calculados **solo con el histórico**, con piso de 0,5 m — evita fuga
@@ -204,12 +227,12 @@ byte a byte salvo el `work_dir`.
 | script | qué hace |
 |---|---|
 | `eval_fase1_seeds.py` | **el evaluador**. Separa móviles de parados, agrega por escena |
-| `agregar_resultados.py` | **el agregador**. Lee los CSV, declara la convención, hace los t pareados |
+| `agregar_resultados.py` | **el agregador**: el único camino a un número publicable. `--peso {objetos,escena}`, `--poblacion {todos,moviles}`, `--metrica {ade,fde}`, `--comparar A:B`, `--por-fold`. Deduplica, verifica cobertura pareja y tolera celdas vacías |
 | `run_fase1_cv.sh` | CV de 5 folds × 8 semillas × 3 variantes |
 | `run_noclip.sh` | fold 0 sin recorte del objetivo |
 | `run_geo.sh` | encoder con objetivo geométrico |
 | `run_jointmotion.sh` | descongelamiento parcial (`finetune_blocks`) |
-| `run_noclip_cv.sh` | **completa la CV de 5 folds** en el protocolo vigente (folds 1-4) |
+| `run_noclip_cv.sh` | **la CV de los 5 folds** (0-4) en el protocolo vigente. El fold 0 también se rehace: sus números viejos son de antes de los arreglos |
 | `extract_mae_encoder.py` | renombra `backbone.*`→`encoder.*` entre pre-train y decoder |
 | `viz_un_auto.py` | trayectoria de un objeto, gate0 vs gated |
 | `viz_rect_reconstruction.py` | reconstrucción del MAE, genérico por CLI |
@@ -219,7 +242,12 @@ byte a byte salvo el `work_dir`.
 `cross_validate_decoder.py`, `horizon_sweep.py`, `reeval_holdout.py`,
 `angular_error_analysis.py`, `latency_benchmark.py`, `run_gate_sweep.sh`.
 
-**Obsoletos (32):** todos los `evaluate_*.py`, `eval_multi_horizon*.py`,
+**`run_fase1_seeds.sh` — obsoleto.** Corre el fold 0 sin `--sin-clip` ni
+`--eval-windows 7`, o sea el protocolo del experimento 15, y su CSV histórico tiene
+el esquema viejo de 9 columnas sin `fold`. Lo reemplaza `run_noclip.sh`, que corre el
+mismo fold con el protocolo correcto.
+
+**Obsoletos (33):** todos los `evaluate_*.py`, `eval_multi_horizon*.py`,
 `eval_uncertainty.py`, `viz_3d_open3d.py`, `viz_clean10.py`,
 `viz_dashboard_cpp_style.py`, `viz_mae_reconstruction.py`,
 `visualize_bev_trajectories.py`, `export_predictions_{global,clean10,npz}.py`,
@@ -281,45 +309,54 @@ posteriores.**
    termine, ningún número de Fase 1 tiene respaldo entre splits.
 2. **Agregar los CSV solo con `agregar_resultados.py`**, nunca a mano: la convención
    de promediado cambia el ADE absoluto un 7%.
-3. **La evaluación se llama FUERA del guard de reanudación** en todos los `run_*.sh`
-   (`run_noclip_cv.sh:88`, y lo mismo en `run_noclip.sh`, `run_geo.sh`,
-   `run_jointmotion.sh`), y `eval_fase1_seeds.py:91` abre el CSV en modo `'a'` sin
-   comprobar si la fila ya existe. **Relanzar una corrida cortada duplica filas.**
-   Una sola fila duplicada mueve la media ponderada ~19%. Verificado el 30/08: los
-   CSV existentes están limpios, el bug es latente. `agregar_resultados.py` ya
-   deduplica al leer y avisa; falta arreglar el lado de escritura — hacerlo cuando
-   termine la corrida en curso, para no tocar un evaluador que se está invocando.
-4. **`--resume` anula `load_from`** (`tools/train.py:111`). El arreglo del commit
+3. **`eval_fase1_seeds.py` sigue sin deduplicar al ESCRIBIR** (abre el CSV en modo
+   `'a'` sin comprobar si la fila existe). Lo que protege hoy son dos capas
+   posteriores: el guard `ya_evaluado()` de los 6 `run_*.sh`, que cuenta filas en el
+   CSV antes de evaluar —cuenta, no busca, porque el evaluador escribe una fila POR
+   ESCENA y una evaluación muerta a mitad dejaría medio resultado—, y la
+   deduplicación al leer de `agregar_resultados.py`. Una sola fila duplicada mueve la
+   media ponderada ~19%.
+4. **El pos-embed del decoder MAE: `requires_grad` se decide en `__init__`,
+   nunca en `init_weights`.** mmengine arma el optimizador ANTES de llamar a
+   `init_weights`, y descarta los parámetros con `requires_grad=False`: ponerlo en
+   `True` ahí es un no-op silencioso. En vóxeles (300 tokens, grilla no rectangular)
+   el tensor debe ser aprendible; si no, se queda en ceros y todo token enmascarado
+   entra al decoder como `mask_token + 0`.
+5. **El sincos 2D es fila-mayor y debe coincidir con `patchify`.**
+   `position_encoding.py:166` usa `meshgrid(grid_h, grid_w)`. Con el orden invertido,
+   en grillas cuadradas queda una transposición espejada invisible; en la grilla real
+   de range-view (4×32) cada token recibe el código de otro parche.
+6. **`--resume` anula `load_from`** (`tools/train.py:111`). El arreglo del commit
    `c6c9e05` fue quitar la bandera de los scripts, **no** parchear la herramienta:
    la mina sigue armada para quien la vuelva a agregar.
-5. **`ref_center` es inconsistente entre los dos datasets bajo augmentación.** En
-   vóxeles se calcula **antes** de rotar (`trajectory_dataset.py:248` vs la llamada en
-   la 263); en range-view, después. Hoy es inofensivo porque todos los consumidores
+7. **`ref_center` es inconsistente entre los dos datasets bajo augmentación.** En
+   vóxeles se calcula **antes** de rotar (`trajectory_dataset.py:296` vs la llamada en
+   la 312); en range-view, después. Hoy es inofensivo porque todos los consumidores
    corren con `augment=False` (`eval_fase1_seeds.py:62`, y los exportadores usan el
    default), pero cualquier evaluación con augmentación daría posiciones absolutas
    incoherentes.
-6. **`mask_ratio` en la config del dataset no hace nada.** `lidar_sequence.py:31` lo
+8. **`mask_ratio` en la config del dataset no hace nada.** `lidar_sequence.py:31` lo
    guarda y nunca lo usa; el enmascarado real lee el del backbone. Los dos valores
    conviven sin estar atados.
-7. **`history_len` en `MAEViT4D` no significa "cantidad de frames"** en el camino de
+9. **`history_len` en `MAEViT4D` no significa "cantidad de frames"** en el camino de
    range-view — es la dimensión del parche aplanado (`256·history_len`).
-8. **`MAEViT.eval()` devuelve `None`** en este fork. Nunca encadenar `.to(dev).eval()`.
-9. **El encoder devuelve los tokens permutados en cada llamada** si no se fija la
+10. **`MAEViT.eval()` devuelve `None`** en este fork. Nunca encadenar `.to(dev).eval()`.
+11. **El encoder devuelve los tokens permutados en cada llamada** si no se fija la
    semilla: 69,3% de diferencia elemento a elemento sin semilla, 0,000% con ella.
-10. **`_encode_scene` duplica a mano** el forward sin enmascarar que `MAEViT4D.forward`
+12. **`_encode_scene` duplica a mano** el forward sin enmascarar que `MAEViT4D.forward`
    ya implementa en su rama de evaluación. Dos implementaciones del mismo cálculo: si
    se cambia una, hay que cambiar la otra.
-11. **El decoder MAE del camino de vóxeles no recibe pos-embed sincos** (grilla de 300
+13. **El decoder MAE del camino de vóxeles no recibe pos-embed sincos** (grilla de 300
    tokens, no cuadrada). Es deliberado, para preservar comparabilidad con el encoder
    del 15/06.
-12. **`mae_neck2.py` es una copia sin ese fix** — usarla con 300 tokens revienta en
+14. **`mae_neck2.py` es una copia sin ese fix** — usarla con 300 tokens revienta en
     `init_weights()` por desajuste de forma.
-13. **`TrajectoryPredictionModel` tiene un bug de forma**: las capas intermedias están
+15. **`TrajectoryPredictionModel` tiene un bug de forma**: las capas intermedias están
     fijas en 512 pero la última usa `hidden_dim` (default 256). Solo funciona con
     `hidden_dim=512`. Está huérfano, así que no muerde.
-14. **`RangeViewTrajectoryDataset` sigue exigiendo `bin_files`** aunque su
+16. **`RangeViewTrajectoryDataset` sigue exigiendo `bin_files`** aunque su
     `__getitem__` lea `range_files` — hereda `load_data_list` sin sobrescribirlo.
-15. **`eval_windows` y `max_windows` solo deben usarse donde corresponde**
+17. **`eval_windows` y `max_windows` solo deben usarse donde corresponde**
     (`eval_windows` en evaluación, `max_windows` en pre-entrenamiento). Ningún assert
     lo impide.
 
@@ -383,14 +420,15 @@ efecto contundente dentro de un fold que se evapora al promediar los cinco, porq
 varianza entre folds es ~3x la de semillas. Ver `docs/EXPERIMENTOS_DECODER.md`,
 experimento 11.
 
-**EN CURSO (lanzado 30/08 00:29):** `run_noclip_cv.sh` completa los folds 1-4 en el
-protocolo vigente. Costo **medido**, no estimado: 18,5 min por encoder (fold 0, 24/08
-12:05→12:24) y 4 h 47 por tanda de 24 decoders (27/08 17:06→21:53) ≈ 5 h por fold,
-~20 h en total. Antifuga verificado antes de lanzar: ninguna escena de validación
+**EN CURSO (relanzado 30/08 09:06):** `run_noclip_cv.sh` corre **los 5 folds**, el 0
+incluido. La primera corrida se abortó a los 97 minutos al descubrir que la escena
+estaba desalineada; los números viejos del fold 0 quedaron obsoletos por el mismo
+motivo, así que se rehacen todos. Costo **medido**, no estimado: ~19 min por encoder y 4 h 47 por tanda de 24
+decoders ≈ 5 h por fold, ~25 h por los cinco. Antifuga verificado antes de lanzar: ninguna escena de validación
 aparece en el train ni en el pre-entrenamiento de su propio fold, cada decoder carga
 el encoder de su fold, y las 10 escenas cubren validación una vez cada una.
-Al terminar: `python agregar_resultados.py work_dirs/noclip/noclip_results.csv
-work_dirs/noclipcv/noclipcv_results.csv --por-fold`.
+Al terminar: `python agregar_resultados.py work_dirs/noclipcv/noclipcv_results.csv
+--por-fold`.
 
 **Segundo hueco relacionado:** ningún script exporta predicciones de los checkpoints
 vigentes. El `predictions_global.txt` del repositorio es del **18 de agosto** y viene

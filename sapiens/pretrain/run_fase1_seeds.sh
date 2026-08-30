@@ -30,8 +30,15 @@ conda activate sapiens_gpu
 # filas, y una sola fila duplicada mueve la media ponderada ~19%. Condicionarlo a
 # NUEVO=1 no alcanzaba: si el corte cae entre entrenar y evaluar, el checkpoint
 # existe y la fila nunca se escribiría. La fuente de verdad es el CSV.
-ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla
-    [ -f "$1" ] && grep -q "^$2,$3,$4," "$1"
+ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla  $5=nº de escenas esperadas
+    [ -f "$1" ] || return 1
+    # Si el nº esperado de escenas es 0 —p.ej. porque VAL quedó vacío— NO se puede
+    # concluir "ya evaluado": `[ n -ge 0 ]` es cierto siempre y saltearíamos la
+    # evaluación de un fold entero en silencio, tras horas de entrenamiento.
+    [ "${5:-1}" -gt 0 ] || return 1
+    # Cuenta filas, no busca una: eval_fase1_seeds.py escribe una fila POR ESCENA.
+    local n; n=$(grep -c "^$2,$3,$4," "$1")
+    [ "$n" -ge "$5" ]
 }
 # El CSV histórico de este script (fase1_results.csv) tiene el esquema VIEJO, de 9
 # columnas sin `fold`. Pero `eval_fase1_seeds.py` hoy escribe SIEMPRE `fold` como
