@@ -1045,6 +1045,149 @@ la diferencia que nuestros experimentos señalan como determinante.
 
 ---
 
+## Experimento 17: objetivo geométrico tipo GeoMAE — el encoder NO convergió
+
+**Fecha:** 2026-08-27. **Script:** `run_geo.sh`. **Configs:** `geo_{mae,dec,base}_fold0.py`.
+**Datos:** `work_dirs/geo/geo_results.csv`, log del encoder en `work_dirs/geo/mae.log`.
+
+**Qué cambia respecto del exp. 16:** el encoder MAE se pre-entrena con objetivo
+`centroide` (predecir el centroide de los puntos dentro de cada vóxel, normalizado
+a [-1,1], NaN en los vacíos) en vez de `ocupacion`, y con 7 ventanas por escena
+(`max_windows=7`, 8 → 56 muestras). La pérdida usa las tres ideas de
+`pointmap_l1_loss.py` de Sapiens: máscara de validez, normalización por magnitud
+media y L1 en vez de MSE. Motivación: GeoMAE (Tian 2023) critica explícitamente a
+quienes "adoptan MAE directamente y solo predicen coordenadas u ocupación" y
+reporta **+2,7 AP** solo por cambiar el objetivo.
+
+**HALLAZGO PRINCIPAL — el pre-entrenamiento geométrico nunca aprendió.**
+
+| encoder | pérdida inicial | pérdida final |
+|---|---|---|
+| ocupación (exp. 16) | 1,946 | **0,221** |
+| **geométrico (exp. 17)** | 0,599 | **0,437**, oscilando |
+
+El de ocupación baja un orden de magnitud; el geométrico se mueve dentro del ruido
+a lo largo de 5000 pasos registrados. **Por lo tanto este experimento NO prueba la
+idea de GeoMAE**: mide un decoder alimentado por un encoder cuyo pre-entrenamiento
+falló en converger. La hipótesis del propio log — vóxel de 2 m demasiado grueso
+para pedir precisión sub-vóxel, cuando GeoMAE usa vóxeles mucho más finos — sigue
+siendo la explicación más plausible y **no está descartada**.
+
+**Resultado del decoder (fold 0, 8 semillas, época fija 100, test de 319):**
+
+| variante | ADE | FDE |
+|---|---|---|
+| baseline | 5,57 ± 1,43 m | 11,16 m |
+| **gate0** (arquitectura, sin escena) | **4,92 ± 1,22 m** | **9,85 m** |
+| gated (con escena, encoder geométrico) | 5,22 ± 0,80 m | 10,39 m |
+
+| comparación | efecto | t | semillas | |
+|---|---|---|---|---|
+| **CAPACIDAD** (baseline − gate0) | **+13,1%** | +5,64 | **8/8** | **significativo** |
+| ESCENA (gate0 − gated) | −5,6% | −1,05 | 7/8 a favor de gate0 | no significativo |
+| geométrico vs ocupación (solo `gated`) | −2,6% | −1,38 | 6/8 | no significativo |
+
+**Nota de consistencia (verificada, no es un bug):** las filas `baseline` y `gate0`
+de `geo_results.csv` son **idénticas** a las de `noclip_results.csv`. Es correcto
+por construcción: con el gate congelado en 0 la rama de escena se multiplica por
+cero, así que el encoder no puede influir en el resultado. Sirve como comprobación
+cruzada de que el montaje es determinista. **No** es una repetición del bug del
+`--resume` (exp. 16): se verificó en los logs que el checkpoint geométrico
+`work_dirs/geo/mae_encoder_fold0.pth` sí se carga.
+
+**Lectura honesta:** la mejora del 2,6% no es significativa y viene de un encoder
+roto. El objetivo geométrico **queda como condición NO probada**, no como
+condición refutada.
+
+---
+
+## Experimento 18: descongelar el encoder (réplica de JointMotion) — sin efecto
+
+**Fecha:** 2026-08-28/29. **Rama:** `encoder/jointmotion-finetune`.
+**Script:** `run_jointmotion.sh`. **Datos:** `work_dirs/jm/jm_results.csv`.
+
+**Motivación.** JointMotion (Wagner 2024) dice en su sección de fine-tuning:
+*"We initialize the modality-specific encoders with the learned weights from
+pre-training and do not freeze any weights during fine-tuning."* Nosotros
+congelábamos los 302,6 M (0 parámetros entrenables): el pre-entrenamiento era un
+**extractor fijo**, no una **inicialización**. Ellos obtienen −3% a −12% de FDE.
+Era la última diferencia metodológica sin probar.
+
+**Por qué parcial y no total.** Descongelar los 302 M enteros da OOM en 8 GB con
+lote 16, y bajar el lote a 4 **degrada el modelo por sí solo** (medido el 28/08:
+ADE 4,84 → 8,29 y el gate colapsa a ~0). Descongelar solo la cola entra en memoria
+con lote 16 y deja comparable el resultado contra todo lo demás. Implementado con
+el parámetro `finetune_blocks` en `TrajectoryModelWithAttention`.
+
+**Diseño:** 3 variantes × 8 semillas, fold 0, encoder geométrico del exp. 17,
+lote 16, época fija 100, test de 319. Todo idéntico salvo cuántos bloques se
+descongelan.
+
+| variante | entrenables en el encoder | ADE | FDE | gate final |
+|---|---|---|---|---|
+| ft0 — congelado (control) | 0 | 5,22 ± 0,80 m | 10,39 m | 0,072 |
+| ft2 — últimos 2 bloques | 25,2 M | 5,22 ± 0,78 m | 10,28 m | 0,068 |
+| ft4 — últimos 4 bloques | 50,4 M | 5,17 ± 0,88 m | 10,28 m | 0,077 |
+
+| comparación | efecto | t | semillas |
+|---|---|---|---|
+| ft2 − ft0 | +0,003 ± 0,152 (+0,1%) | +0,05 | 4/8 |
+| ft4 − ft0 | −0,052 ± 0,283 (−1,0%) | −0,52 | 4/8 |
+
+**Diagnóstico:**
+
+1. **Descongelar no tiene ningún efecto.** Diferencias de milésimas, sin dirección
+   consistente, y las semillas se reparten mitad y mitad — la firma de un efecto
+   nulo, no de uno pequeño.
+2. **El control valida el montaje:** `ft0` reproduce el `gated` del exp. 17 exacto
+   (mismas corridas reutilizadas), y el encoder geométrico se carga de verdad
+   (`Load checkpoint from ./work_dirs/geo/mae_encoder_fold0.pth` presente en los
+   24 logs). Verificado explícitamente por el antecedente del bug del `--resume`.
+3. **Queda descartada la hipótesis del congelamiento** como explicación del
+   resultado negativo del proyecto.
+
+---
+
+## Convención de promediado — LEER ANTES DE CITAR UN ADE
+
+Las dos escenas de validación del fold 0 tienen **200 y 119 objetos**. Promediarlas
+con peso igual o ponderadas por número de objetos da números distintos:
+
+| variante | media simple de escenas | ponderada por objetos |
+|---|---|---|
+| ft0 | 4,836 | **5,217** |
+| ft2 | 4,845 | **5,220** |
+| ft4 | 4,804 | **5,165** |
+
+Un 7% de diferencia. Los números reportados en la reunión del 26/08 y en los
+experimentos 15-17 usan la **media simple**, que le da el mismo peso a la escena
+fácil que a la difícil. La **ponderada es la defendible** en la disertación.
+Las comparaciones entre modelos no cambian (todos comparten el promedio), pero el
+ADE absoluto sí. **Fijar una convención y declararla antes de cada tabla.**
+
+---
+
+## Estado al 2026-08-30 — las condiciones de la literatura, probadas
+
+Cuatro condiciones separan nuestro montaje de los trabajos que sí obtienen ganancia
+con auto-supervisión. Estado de cada una:
+
+| condición | qué probamos | resultado |
+|---|---|---|
+| escala del pre-entrenamiento | 8 → 56 muestras (`max_windows`) | sin cambio |
+| representación | vóxeles vs range-view | empatan (exp. 15) |
+| encoder descongelado | 2 y 4 bloques, 8 semillas | **sin efecto** (exp. 18) |
+| **objetivo geométrico** | centroide — **el encoder no convergió** | **NO PROBADA** (exp. 17) |
+
+**Lo que queda en pie:** la atención entre objetos aporta **−10% a −13% de ADE,
+8/8 semillas, t≈−5,4**, replicado en los experimentos 16 y 17. Es el resultado más
+firme del proyecto. La escena LiDAR auto-supervisada no aporta a esta escala.
+
+**La única vía sin agotar** es hacer que el objetivo geométrico converja de verdad
+(vóxel más fino), y el objetivo CME de JointMotion, que conecta explícitamente el
+movimiento con el entorno.
+
+
 ## Estado al 2026-08-27 — tras la reunión con Claudine
 
 **La reunión salió bien.** Los resultados fueron aceptados. Surgieron tres
@@ -1106,13 +1249,13 @@ Repos completos clonados en `~/referencias/{sapiens_full,sapiens2}`.
 | GeoMAE (Tian 2023) | **+2,7 AP** cambiando el objetivo a targets geométricos; funciona sin datos extra |
 | JointMotion (Wagner 2024) | auto-supervisión para movimiento, pero **0 menciones de LiDAR** (polilíneas) |
 
-### Experimento 17 (en curso): objetivo geométrico
+### Experimento 17: objetivo geométrico — CERRADO, ver arriba
 
 Encoder del fold 0 con objetivo `centroide` + 7 ventanas (56 muestras), pérdida
 con máscara de validez, normalización por magnitud y L1 (ideas de
 `pointmap_l1_loss.py` de Sapiens). Configs `geo_*_fold0.py`, script `run_geo.sh`.
 
-**Señal de alerta:** la pérdida del encoder **no baja** (0,48 → 0,45 en 720
-épocas, oscilando), contra el modo anterior que caía 1,95 → 0,27 en 3 épocas.
-Puede ser tarea irreducible, o que el vóxel de 2 m sea demasiado grande para
-pedir precisión sub-vóxel (GeoMAE usa vóxeles mucho más finos). No esperar mejora.
+**La señal de alerta se confirmó:** la pérdida del encoder nunca bajó
+(0,599 → 0,437 en 5000 pasos, oscilando), contra el modo anterior que caía
+1,946 → 0,221. El objetivo geométrico **no llegó a probarse**. Resultado
+completo en la sección "Experimento 17" más arriba.

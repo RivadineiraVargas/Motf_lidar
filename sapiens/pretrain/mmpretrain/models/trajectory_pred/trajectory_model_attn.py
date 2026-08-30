@@ -15,6 +15,7 @@ class TrajectoryModelWithAttention(BaseModel):
                  hidden_dim=512,
                  scene_dim=64,
                  freeze_encoder=False,
+                 finetune_blocks=0,
                  use_gate=True,
                  gate_init=0.0,
                  freeze_gate=False,
@@ -22,9 +23,25 @@ class TrajectoryModelWithAttention(BaseModel):
                  **kwargs):
         super().__init__(**kwargs)
         self.encoder = MODELS.build(encoder)
+        # finetune_blocks=N descongela los ÚLTIMOS N bloques del encoder, dejando
+        # el resto congelado. JointMotion (Wagner 2024) no congela nada — usa el
+        # pre-entrenamiento como INICIALIZACIÓN, no como extractor fijo — pero
+        # descongelar los 302M enteros da OOM en 8 GB con lote 16, y bajar el lote
+        # a 4 degrada el modelo por sí solo (ADE 4.84 -> 8.29, medido el 28/08).
+        # Descongelar solo la cola entra en memoria con lote 16 y permite comparar
+        # contra todo lo medido cambiando UNA sola variable.
         if freeze_encoder:
             for p in self.encoder.parameters():
                 p.requires_grad = False
+            if finetune_blocks > 0:
+                capas = getattr(self.encoder, 'layers', None)
+                if capas is None:
+                    raise AttributeError('el encoder no expone .layers; no se '
+                                         'puede descongelar por bloques')
+                for capa in capas[-finetune_blocks:]:
+                    for p in capa.parameters():
+                        p.requires_grad = True
+        self.finetune_blocks = finetune_blocks
         self.history_len = history_len
         self.pred_len = pred_len
         self.embed_dim = embed_dim
