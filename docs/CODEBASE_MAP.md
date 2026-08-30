@@ -1,6 +1,6 @@
 ---
-last_mapped: 2026-08-30T04:05:00Z
-total_files: 179
+last_mapped: 2026-08-30T04:40:00Z
+total_files: 177
 total_tokens: 192000
 ---
 
@@ -8,7 +8,7 @@ total_tokens: 192000
 
 > Generado por Cartographer con cuatro agentes en paralelo. Último mapeo: 2026-08-30. Modo actualización: auditoría del código nuevo.
 
-**Alcance.** Este mapa cubre el **código propio del proyecto**: 179 archivos, ~192k
+**Alcance.** Este mapa cubre el **código propio del proyecto**: 177 archivos, ~192k
 tokens. Deja fuera a propósito el `mmpretrain` vendido (cientos de archivos de
 ImageNet, CLIP, BLIP, ViG y demás que nunca tocamos) y los datasets. Si buscás algo
 que no está acá, probablemente sea código de Sapiens sin modificar.
@@ -19,8 +19,8 @@ que no está acá, probablemente sea código de Sapiens sin modificar.
 | Pipeline de datos | 23 | `utilities/` |
 | Scripts de experimentos | 59 | `sapiens/pretrain/*.{py,sh}` |
 | Núcleo MOTF | 13 | `sapiens/pretrain/mmpretrain/{datasets,models}/` |
-| Configs de experimentos | 70 |
-| Hooks de Claude Code | 2 | `.claude/hooks/` | `sapiens/pretrain/configs/sapiens_mae/lidar/` |
+| Configs de experimentos | 70 | `sapiens/pretrain/configs/sapiens_mae/lidar/` |
+| Hooks de Claude Code | 2 | `.claude/hooks/` |
 
 ---
 
