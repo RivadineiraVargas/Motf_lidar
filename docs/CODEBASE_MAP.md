@@ -1,6 +1,6 @@
 ---
 last_mapped: 2026-08-30T03:17:00Z
-total_files: 168
+total_files: 177
 total_tokens: 192000
 ---
 
@@ -8,7 +8,7 @@ total_tokens: 192000
 
 > Generado por Cartographer con cuatro agentes en paralelo. Último mapeo: 2026-08-30.
 
-**Alcance.** Este mapa cubre el **código propio del proyecto**: 168 archivos, ~192k
+**Alcance.** Este mapa cubre el **código propio del proyecto**: 177 archivos, ~192k
 tokens. Deja fuera a propósito el `mmpretrain` vendido (cientos de archivos de
 ImageNet, CLIP, BLIP, ViG y demás que nunca tocamos) y los datasets. Si buscás algo
 que no está acá, probablemente sea código de Sapiens sin modificar.
@@ -17,9 +17,9 @@ que no está acá, probablemente sea código de Sapiens sin modificar.
 |---|---|---|
 | Visor C++ | 10 | raíz del repo |
 | Pipeline de datos | 23 | `utilities/` |
-| Scripts de experimentos | 58 | `sapiens/pretrain/*.{py,sh}` |
+| Scripts de experimentos | 59 | `sapiens/pretrain/*.{py,sh}` |
 | Núcleo MOTF | 13 | `sapiens/pretrain/mmpretrain/{datasets,models}/` |
-| Configs de experimentos | 62 | `sapiens/pretrain/configs/sapiens_mae/lidar/` |
+| Configs de experimentos | 70 | `sapiens/pretrain/configs/sapiens_mae/lidar/` |
 
 ---
 
@@ -77,7 +77,7 @@ números es un error que ya se cometió y produjo afirmaciones falsas.
 | **decoder_mini / Wayformer** | ago 4–18 | `waymo_clean` 25 escenas, range-view rect | `train_decoder_mini.py`, 6785 tokens | `reeval_holdout.py` | paralelo, **congelado** |
 | **Fase 1 CV** | ago 23–28 | `waymo_clean` 10 escenas, vóxeles 300 tok / range-view 128 tok | configs `f1cv_*`, `noclip_*`, `geo_*` | **`eval_fase1_seeds.py`** | **VIGENTE** |
 
-De los 58 scripts, **32 están obsoletos**. La tabla completa está más abajo.
+De los 59 scripts, **32 están obsoletos**. La tabla completa está más abajo.
 
 ---
 
@@ -158,12 +158,12 @@ a propósito, para que la máscara los descarte.
 
 ## Configs — familias y cadena encoder→decoder
 
-Las 62 configs se agrupan en familias generadas por scripts. Las vigentes:
+Las 70 configs se agrupan en familias generadas por scripts. Las vigentes:
 
 | familia | qué es | encoder que carga |
 |---|---|---|
 | `f1cv_{mae,base,dec}_fold{0..4}` | la CV principal de 5 folds | `f1cv/mae_encoder_fold{F}.pth` (el de su propio fold) |
-| `noclip_{base,dec}_fold0` | fold 0 sin recorte, escala fija 10 m | `f1cv/mae_encoder_fold0.pth` |
+| `noclip_{base,dec}_fold{0..4}` | sin recorte, escala fija 10 m — el protocolo vigente | `f1cv/mae_encoder_fold{F}.pth` |
 | `geo_{mae,base,dec}_fold0` | objetivo geométrico + 7 ventanas | `geo/mae_encoder_fold0.pth` |
 | `rvcv_*` / `rvaug_*` | range-view fold 0, sin y con augmentación | `mae_encoder_rangeview.pth` |
 
@@ -208,6 +208,7 @@ byte a byte salvo el `work_dir`.
 | `run_noclip.sh` | fold 0 sin recorte del objetivo |
 | `run_geo.sh` | encoder con objetivo geométrico |
 | `run_jointmotion.sh` | descongelamiento parcial (`finetune_blocks`) |
+| `run_noclip_cv.sh` | **completa la CV de 5 folds** en el protocolo vigente (folds 1-4) |
 | `extract_mae_encoder.py` | renombra `backbone.*`→`encoder.*` entre pre-train y decoder |
 | `viz_un_auto.py` | trayectoria de un objeto, gate0 vs gated |
 | `viz_rect_reconstruction.py` | reconstrucción del MAE, genérico por CLI |
@@ -269,8 +270,9 @@ Dependencias en `requirements.txt`: `tensorflow[and_cuda]`,
 
 Ordenadas por lo que cuesta descubrirlas de nuevo.
 
-1. **Todos los resultados vigentes son de UN SOLO FOLD** (el 0). La CV de 5 folds de
-   Fase 1 nunca se corrió. Ver la sección del hueco de reproducibilidad.
+1. **Los resultados de los experimentos 15-18 son de UN SOLO FOLD** (el 0). La CV de
+   5 folds se está completando desde el 30/08 con `run_noclip_cv.sh`; hasta que
+   termine, ningún número de Fase 1 tiene respaldo entre splits.
 2. **Agregar los CSV solo con `agregar_resultados.py`**, nunca a mano: la convención
    de promediado cambia el ADE absoluto un 7%.
 3. **`--resume` anula `load_from`** (`tools/train.py:111`). El arreglo del commit
@@ -362,8 +364,17 @@ semillas — descansan sobre **un solo split de escenas**.
 
 Es exactamente el patrón que ya se llevó puestos dos resultados (18/07 y 06/08): un
 efecto contundente dentro de un fold que se evapora al promediar los cinco, porque la
-varianza entre folds es ~3x la de semillas. Completarlo cuesta 4 encoders de ~12,5 h.
-Ver `docs/EXPERIMENTOS_DECODER.md`, experimento 11.
+varianza entre folds es ~3x la de semillas. Ver `docs/EXPERIMENTOS_DECODER.md`,
+experimento 11.
+
+**EN CURSO (lanzado 30/08 00:29):** `run_noclip_cv.sh` completa los folds 1-4 en el
+protocolo vigente. Costo **medido**, no estimado: 18,5 min por encoder (fold 0, 24/08
+12:05→12:24) y 4 h 47 por tanda de 24 decoders (27/08 17:06→21:53) ≈ 5 h por fold,
+~20 h en total. Antifuga verificado antes de lanzar: ninguna escena de validación
+aparece en el train ni en el pre-entrenamiento de su propio fold, cada decoder carga
+el encoder de su fold, y las 10 escenas cubren validación una vez cada una.
+Al terminar: `python agregar_resultados.py work_dirs/noclip/noclip_results.csv
+work_dirs/noclipcv/noclipcv_results.csv --por-fold`.
 
 **Segundo hueco relacionado:** ningún script exporta predicciones de los checkpoints
 vigentes. El `predictions_global.txt` del repositorio es del **18 de agosto** y viene
@@ -392,4 +403,8 @@ trampa que más veces mordió.
 `predictions_global.txt` en la raíz → `./show_point_cloud --input waymo_clean_view`.
 
 **Para agregar un fold:** config `f1cv_{mae,base,dec}_fold{F}.py` con su lista de
-escenas, y el `load_from` apuntando al encoder **de ese mismo fold**.
+escenas, y el `load_from` apuntando al encoder **de ese mismo fold**. El generador de
+las variantes sin recorte está en la cabecera de `run_noclip_cv.sh`.
+
+**Para publicar cualquier número:** `agregar_resultados.py`, nunca a mano. Declarar la
+convención de promediado, el número de folds y el de semillas ANTES de la tabla.
