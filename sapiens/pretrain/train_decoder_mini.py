@@ -281,6 +281,26 @@ class MiniWayformerGated(nn.Module):
 
 
 @torch.no_grad()
+def _enc_id(encoder):
+    """Huella corta del encoder, para que el cache de features no mezcle modelos.
+
+    Usa la ruta del checkpoint del que se cargó y su mtime si están disponibles;
+    si no, cae a un hash de la forma de sus pesos. Nunca lanza: en el peor caso
+    devuelve 'desconocido' y el cache se comporta como antes.
+    """
+    import hashlib
+    try:
+        ck = getattr(encoder, '_motf_ckpt', None)
+        if ck and os.path.exists(ck):
+            sem = f'{os.path.abspath(ck)}:{os.path.getmtime(ck)}'
+        else:
+            sem = ''.join(f'{k}{tuple(v.shape)}'
+                          for k, v in list(encoder.state_dict().items())[:40])
+        return hashlib.sha1(sem.encode()).hexdigest()[:10]
+    except Exception:
+        return 'desconocido'
+
+
 def encode_sweeps(encoder, scene, ts, dev, cache_dir=None):
     """OJO fork: MAEViT ignora mask=False y siempre enmascara. Con
     mask_ratio=0 conserva TODOS los tokens (permutados, irrelevante para
@@ -292,7 +312,11 @@ def encode_sweeps(encoder, scene, ts, dev, cache_dir=None):
     cruzada: 25 escenas se codifican UNA vez, se reusan en fold x seed x arch).
     """
     if cache_dir is not None:
-        path = os.path.join(cache_dir, f'{scene}.pt')
+        # La clave incluye la IDENTIDAD DEL ENCODER. Antes era solo {scene}.pt:
+        # cambiar --enc y reusar el mismo --cache servía features del encoder
+        # viejo, y el CSV se las atribuía al nuevo. Este proyecto ya pagó dos
+        # experimentos por un fallo de esta familia (c6c9e05).
+        path = os.path.join(cache_dir, f'{scene}__{_enc_id(encoder)}.pt')
         if os.path.exists(path):
             cached = torch.load(path, map_location=dev)
             if all(t in cached for t in ts):
@@ -336,7 +360,17 @@ def load_frozen_encoder(enc_ckpt, dev):
     cfg = Config.fromfile(CFG)
     mae = MODELS.build({**cfg.model, 'data_preprocessor': cfg.data_preprocessor})
     sd = torch.load(enc_ckpt, map_location='cpu').get('state_dict')
-    mae.load_state_dict(sd, strict=False)
+    faltan = mae.load_state_dict(sd, strict=False)
+    mae._motf_ckpt = str(ckpt)
+    # strict=False acepta en silencio un checkpoint que no case en NADA
+    # (prefijos cambiados, arquitectura distinta) y deja el encoder
+    # aleatorio produciendo un ADE plausible. Es exactamente lo que pasó
+    # en c6c9e05, así que acá se verifica que algo se haya cargado.
+    cargadas = len(sd) - len(getattr(faltan, 'unexpected_keys', []))
+    if cargadas <= 0:
+        raise RuntimeError(
+            f'{ckpt}: ninguna clave del checkpoint coincidió con el encoder. '
+            'Correr así entrena sobre un encoder ALEATORIO.')
     encoder = mae.backbone.to(dev)
     encoder.eval()          # OJO: este fork retorna None en .eval(), no encadenar
     for p in encoder.parameters():

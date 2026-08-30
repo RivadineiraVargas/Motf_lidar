@@ -1,0 +1,148 @@
+# Revisión de código del 30/08/2026 — los 13 hallazgos, verificados uno por uno
+
+`/code-review` sobre `master...encoder/jointmotion-finetune` (169 archivos) devolvió
+13 hallazgos. **Los 13 se verificaron a mano antes de aceptarlos**, con lectura de
+código y medición sobre datos reales. Doce son reales; uno es real pero no llegó a
+afectar ningún número publicado.
+
+Este documento existe porque un informe de revisión sin verificar es una lista de
+sospechas, no de hechos — y este proyecto ya se equivocó nueve veces por dar algo
+por cierto sin medirlo.
+
+## Resumen
+
+| # | hallazgo | verificado | estado |
+|---|---|---|---|
+| 6 | **la escena está desalineada en el tiempo** | **43% de los objetos** | ABIERTO — el más grave |
+| 2 | el pos-embed del decoder MAE queda en ceros | `requires_grad=False` | ABIERTO |
+| 7 | el sincos 2D está transpuesto respecto de los tokens | numéricamente | ABIERTO |
+| 3 | el mejor checkpoint se elige sobre el propio test | `if un[0] < best_ade` | ABIERTO (track congelado) |
+| 5 | `max_jump` solo cubre la primera ventana | `globals_[:sequence_len]` | ABIERTO |
+| 8 | `_geo` nunca se limpia entre lotes | leído | ABIERTO |
+| 11 | reanudar duplica filas del CSV | reproducido | mitigado al leer; escritura ABIERTA |
+| 9 | tres evaluadores viejos miden contra el objetivo recortado | 0 menciones de `clip_norm` | los tres son OBSOLETOS |
+| 13 | `sequence_len` se acepta y no se usa | leído | ABIERTO (menor) |
+| 1 | la etiqueta de arquitectura se ignoraba | CSV con valores distintos | **ARREGLADO** |
+| 4 | el cache de features no distinguía encoders | `{scene}.pt` | **ARREGLADO** |
+| 10 | `strict=False` sin verificar que algo cargara | leído | **ARREGLADO** en `train_decoder_mini` |
+| 12 | efecto nulo reportado como `t=inf, p=0.0000` | reproducido | **ARREGLADO** |
+
+---
+
+## 6 — La escena está desalineada en el tiempo (el importante)
+
+`trajectory_dataset.py:255`. `centers` se construye desde `object_tracks[obj_id]`,
+que solo contiene los frames donde ese objeto fue etiquetado, ordenados. O sea que
+`centers` se indexa **por posición en el track**. Pero el mismo índice se usa como
+**número de frame absoluto** para cargar la escena:
+
+```python
+t0 = item.get('t_start', 0)
+for i in range(t0, t0 + self.history_len):
+    points = self.load_bin(os.path.join(scene_bin, f"{i}.bin"))
+```
+
+Un objeto que aparece por primera vez en el frame 6 recibe la escena de los bins
+0 a 4. Con **11 frames de LiDAR en total**, ese desfase es una parte distinta de
+la secuencia.
+
+**Medido sobre las dos escenas de validación del fold 0:**
+
+| | |
+|---|---|
+| objetos evaluados | 51 |
+| con la escena desalineada | **22 (43%)** |
+| desfases observados | hasta 6 frames |
+
+Sobre cuatro escenas, **el 56% de los tracks no arranca en el frame 0** y el 37%
+tiene huecos.
+
+**Ocurre con `eval_windows=1`**, o sea en todos los experimentos del proyecto —
+no solo en los que usan ventanas múltiples.
+
+**Qué NO invalida:** el resultado de capacidad (−10%, 8/8 semillas). `baseline` y
+`gate0` no usan la escena.
+
+**Qué pone en duda:** la conclusión central. La escena puede no haber ayudado
+porque, para casi la mitad de los objetos, **era la escena de otro momento**. Es un
+mecanismo plausible, no una causa probada: hay que medirlo alineando y repitiendo
+el fold 0.
+
+**Por qué no está arreglado todavía:** hay una CV de 20 h en curso sobre este
+mismo código. Cambiar el alineamiento a mitad haría que los folds 1-4 no fueran
+comparables con el fold 0.
+
+## 2 — El pos-embed del decoder MAE se queda en ceros
+
+`mae_neck.py:80` declara `decoder_pos_embed` con `requires_grad=False`. Para los
+300 tokens de vóxeles el sincos 2D da 290 contra 301, así que cae al `else`, que
+registra *"se deja aprendible"*. **Ese mensaje es falso**: el parámetro no es
+aprendible y se queda exactamente en `torch.zeros`. Cada token enmascarado entra
+al decoder como `mask_token + 0`, indistinguible de cualquier otro: el decoder no
+puede saber qué vóxel está reconstruyendo.
+
+Es de la misma familia que el bug `decoder_pos_embed` documentado del MAE del
+colega, reintroducido acá al asumir que era inofensivo. El comentario lo escribí yo
+en f82caee y está equivocado.
+
+## 7 — El sincos 2D está transpuesto respecto de los tokens
+
+`build_2d_sincos_position_embedding` hace `torch_meshgrid(grid_w, grid_h)` con
+indexado `ij`, o sea una grilla `(w, h)`: la fila *k* del pos-embed corresponde a
+`(w=k//h, h=k%h)`. `patchify` emite los tokens en orden fila-mayor, `(h*w + w)`.
+
+**Verificado numéricamente** en la grilla real de range-view (4×32): el token 1
+debería recibir el código de `(w=1, h=0)` y recibe el de `(w=0, h=1)`. Cada token
+recibe el código de otro parche, lo que destruye la noción de vecindad 2D que el
+cambio quería aportar. En grillas cuadradas es una transposición al menos
+consistente; en 4×32 no.
+
+## 3 — El mejor checkpoint se elige sobre el propio conjunto de test
+
+`train_decoder_mini.py:520`: `if un[0] < best_ade`, donde `un[0]` es el ADE de las
+escenas retenidas. Ese mismo mínimo es lo que se escribe en los CSV. Selección de
+modelo y reporte usan los mismos datos, así que todo ADE de ese track es un
+mínimo-sobre-épocas de la métrica de test: sesgado hacia abajo, y **de forma
+desigual entre arquitecturas** (la más ruidosa gana más con el mínimo).
+
+Es el hallazgo H1 de la auditoría del 23/08. Fase 1 lo resolvió evaluando en época
+FIJA 100; el track `decoder_mini` sigue emitiendo el número sesgado.
+
+## 5 — `max_jump` solo cubre la primera ventana
+
+`trajectory_dataset.py:145`: `seq_g = globals_[:self.sequence_len]`. El filtro
+anti-corrupción mira los primeros `sequence_len` frames, pero con `eval_windows>1`
+se emiten ventanas que llegan más lejos. Un track que se rompe después del primer
+tramo pasa el filtro y sus frames corruptos entran en las ventanas extra —
+justamente el salto de decenas de metros que el filtro existe para atrapar.
+
+Afecta a las corridas evaluadas con `--eval-windows 7`: experimentos 16, 17 y 18.
+
+## Los arreglados
+
+**1 — la etiqueta de arquitectura se ignoraba.** `cross_validate_decoder.py:144`
+pasaba `arch=model_arch`, que solo se fija en la rama de fine-tuning y por defecto
+vale `'wayformer'`. Toda arquitectura se entrenaba como wayformer y, con la misma
+semilla, `baseline` salía idéntica bit a bit. **Verificado que no afectó nada
+publicado:** las 4 arquitecturas de `cv_results.csv` dan valores distintos en los
+15 pares, o sea que ese CSV es anterior a la regresión (2d4da08, 29/07).
+
+**4 y 10 — cache y carga de checkpoints.** El cache era `{scene}.pt`, sin
+referencia al encoder: cambiar `--enc` y reusar el `--cache` servía features del
+modelo viejo. Ahora la clave incluye una huella del checkpoint. Y `load_state_dict(
+strict=False)` aceptaba en silencio un checkpoint que no casara en nada, dejando un
+encoder aleatorio; ahora falla con un mensaje explícito.
+
+**12 — `t=inf, p=0.0000` para un efecto nulo.** En `agregar_resultados.py`, cinco
+folds con efecto exactamente cero se imprimían como el resultado más significativo
+posible.
+
+## Lo que hay que hacer cuando termine la CV
+
+1. **Alinear la escena con la trayectoria** y repetir el fold 0. Es el experimento
+   que decide si el resultado negativo del proyecto era real.
+2. Arreglar el pos-embed (2) y el sincos (7) — los dos tocan el pre-entrenamiento,
+   así que hay que reentrenar encoders.
+3. Recalcular `max_jump` por ventana (5).
+4. Limpiar `_geo` al inicio de cada `forward` (8).
+5. Mover la evaluación dentro del guard de reanudación en los `run_*.sh` (11).

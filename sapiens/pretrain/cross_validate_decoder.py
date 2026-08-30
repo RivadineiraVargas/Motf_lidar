@@ -141,7 +141,17 @@ def run(archs, epochs, lr, hist, enc_ckpt, cache_dir, csv_path, dev='cuda',
                                    if finetuning else encoder)
                     m, ep = train_decoder(
                         train_scenes, held_out, epochs=epochs, lr=lr,
-                        arch=model_arch, hist=hist, out_dir=run_dir, seed=seed,
+                        # arch_label, NO model_arch: model_arch solo se fija en la
+                        # rama de fine-tuning (línea 183). Con el default 'wayformer'
+                        # toda arquitectura se entrenaba como wayformer y, con la misma
+                        # semilla, la fila 'baseline' salía idéntica bit a bit a la de
+                        # 'wayformer' -> la diferencia pareada daba 0 exacto. Regresión
+                        # introducida en 2d4da08 (29/07) al refactorizar el fine-tuning;
+                        # antes decía arch=arch. VERIFICADO que cv_results.csv es
+                        # ANTERIOR (sus 4 arquitecturas dan valores distintos), así que
+                        # ningún número publicado quedó afectado.
+                        arch=(model_arch if finetuning else arch_label),
+                        hist=hist, out_dir=run_dir, seed=seed,
                         encoder=enc_this_run, cache_dir=cache_dir, eval_every=20,
                         save_viz=False, verbose=False, dev=dev,
                         finetune_encoder_blocks=finetune_blocks, enc_lr=enc_lr)
