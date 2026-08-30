@@ -107,6 +107,17 @@ class TrajectoryDataset(BaseDataset):
             n_sweeps_escena = len([f for f in os.listdir(bins_dir)
                                    if f.endswith('.bin')]) \
                 if os.path.isdir(bins_dir) else 0
+            # 467 de los 492 directorios de bin_files están VACÍOS (solo las 25
+            # escenas descargadas tienen barridos). Con n_sweeps=0 el bucle de
+            # ventanas corta en la primera iteración y la escena aporta 0 ítems:
+            # un typo en la lista `scenes` de un config daría un dataset más chico
+            # —o vacío— sin un solo mensaje. Antes fallaba ruidosamente al abrir
+            # el .bin. Se avisa fuerte.
+            if n_sweeps_escena == 0:
+                print(f'[TrajectoryDataset] !! escena {scene}: 0 barridos en '
+                      f'{bins_dir} — NO aporta ninguna muestra. ¿Está bien el '
+                      f'nombre en `scenes`, o falta descargar los datos?')
+                continue
             if len(frame_dirs) < self.sequence_len:
                 continue
 

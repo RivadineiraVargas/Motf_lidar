@@ -125,7 +125,7 @@ def run(archs, epochs, lr, hist, enc_ckpt, cache_dir, csv_path, dev='cuda',
         writer = csv.writer(fcsv)
         if new_file:
             writer.writerow(['fold', 'seed', 'arch', 'ade8', 'ade5', 'fde', 'acc',
-                             'train_ade8', 'best_ep', 'held_out_scenes'])
+                             'train_ade8', 'best_ep', 'final_ade8', 'held_out_scenes'])
         for fi in fold_ids:
             held_out = folds[fi]
             train_scenes = [s for s in scenes if s not in held_out]
@@ -158,7 +158,7 @@ def run(archs, epochs, lr, hist, enc_ckpt, cache_dir, csv_path, dev='cuda',
                     print(f'  -> ADE8 {m["ade8"]:.2f}  ADE5 {m["ade5"]:.2f}  '
                           f'FDE {m["fde"]:.2f}  (mejor ep {ep})')
                     writer.writerow([fi, seed, arch_label, m['ade8'], m['ade5'],
-                                     m['fde'], m['acc'], m['train_ade8'], ep,
+                                     m['fde'], m['acc'], m['train_ade8'], ep, m.get('final_ade8'),
                                      ';'.join(held_out)])
                     fcsv.flush()
 

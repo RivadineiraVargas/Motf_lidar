@@ -248,3 +248,60 @@ ejercita el pos-embed arreglado.
 Los arreglos necesitan la misma verificación que los hallazgos. Cuatro de mis doce
 arreglos estaban mal, y el peor no habría fallado: habría entrenado feliz durante
 26 horas produciendo un encoder inútil.
+
+
+---
+
+## Tercera vuelta: 8 hallazgos más, y la confirmación de que el núcleo está bien
+
+La tercera pasada **verificó corriendo** que los arreglos que importan están
+correctos: el pos-embed (`mae_neck.py`), el orden del sincos
+(`position_encoding.py`), la limpieza de `_geo` (`mae_4d.py`) y la alineación
+temporal (`trajectory_dataset.py`, 183 ventanas, `f0` máximo 6, cero violaciones).
+
+Los 8 hallazgos nuevos estaban todos en los bordes:
+
+| # | qué era | estado |
+|---|---|---|
+| 1 | con `VAL` vacío, `[ n -ge 0 ]` es cierto: se salteaba la evaluación de un fold entero en silencio | ARREGLADO |
+| 5 | escena sin barridos → dataset vacío sin aviso. **467 de 492 directorios de `bin_files` están vacíos** | ARREGLADO — avisa |
+| 4 | `best_metrics['final_ade8']` sin guard contra `None` — mi arreglo anterior no se había aplicado | ARREGLADO |
+| 2 | `run_fase1_seeds.sh` mezclaba esquemas de CSV (9 columnas vs 11) | ARREGLADO — CSV propio |
+| 3 | `final_ade8` se calculaba y no lo leía nadie | ARREGLADO — es columna |
+| 6 | `--resume` del MAE ahora falla contra checkpoints viejos (397 vs 398 param groups) | documentado |
+| 7 | el comentario decía 198 muestras; son 183 | ARREGLADO |
+| 8 | el guard del MAE filtraba por `sequence_len` en vez de `history_len` | ARREGLADO |
+
+El **4** merece una nota: yo creí haberlo arreglado en la segunda vuelta y el
+`sed` falló en silencio. Verificar el arreglo no es opcional.
+
+### Verificaciones finales
+
+Los cuatro casos del guard, probados con bash de verdad:
+
+| caso | esperado | resultado |
+|---|---|---|
+| las 2 escenas ya en el CSV | saltea | saltea |
+| solo 1 de 2 | evalúa | evalúa |
+| ninguna | evalúa | evalúa |
+| `VAL` vacío (n=0) | evalúa | evalúa |
+
+El aviso de escena vacía, disparado sobre un caso real (`101d4e5775093d0c`, con
+etiquetas y sin barridos): imprime y salta.
+
+Humo final: decoder 2 épocas (0,2921) + evaluación real, que reporta n=84 y n=99
+sobre las dos escenas de validación — las 183 ventanas.
+
+### Tamaños definitivos
+
+| conjunto | original | final |
+|---|---|---|
+| entrenamiento | 200 | **236** |
+| validación (1 ventana) | 51 | **29** |
+| validación (7 ventanas) | 319 | **183** |
+
+### Balance de las tres rondas
+
+33 hallazgos en total: 13 en el código base, 12 tras los primeros arreglos (4
+introducidos por mí) y 8 en la tercera. **Ninguna ronda salió limpia.** La
+segunda encontró un no-op que habría desperdiciado 26 horas de GPU sin fallar.

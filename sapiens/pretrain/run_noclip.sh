@@ -15,8 +15,12 @@ ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla  $5=nº de escenas 
     # fila POR ESCENA: si una evaluación previa murió después de la primera, dar
     # la combinación por hecha dejaría el fold con medio resultado, en silencio.
     [ -f "$1" ] || return 1
+    # Si el nº esperado de escenas es 0 —p.ej. porque VAL quedó vacío— NO se puede
+    # concluir "ya evaluado": `[ n -ge 0 ]` es cierto siempre y saltearíamos la
+    # evaluación de un fold entero en silencio, tras horas de entrenamiento.
+    [ "${5:-1}" -gt 0 ] || return 1
     local n; n=$(grep -c "^$2,$3,$4," "$1")
-    [ "$n" -ge "${5:-1}" ]
+    [ "$n" -ge "$5" ]
 }
 D=configs/sapiens_mae/lidar; VAL="7e2f727866c69ea0 82f90331a1dfe968"
 mkdir -p work_dirs/noclip

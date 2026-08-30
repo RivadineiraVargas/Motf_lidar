@@ -75,7 +75,11 @@ class LidarSequenceDataset(BaseDataset):
             # Antes esto devolvía 1 ítem por escena: con 8 escenas de train, el
             # MAE se pre-entrenaba con 8 muestras (verificado el 26/08). Con 11
             # barridos y history_len=5 entran ~7 ventanas por escena.
-            if len(bin_files) < self.sequence_len:
+            # El MAE solo necesita `history_len` barridos consecutivos;
+            # `sequence_len` es el horizonte de TRAYECTORIA y no tiene nada que
+            # ver acá. Filtrar por sequence_len dejaría el dataset vacío en
+            # silencio si alguien copia un config de decoder (35) a uno de MAE.
+            if len(bin_files) < self.history_len:
                 continue
             n_win = len(bin_files) - self.history_len + 1
             for t0 in range(max(0, min(n_win, self.max_windows))):

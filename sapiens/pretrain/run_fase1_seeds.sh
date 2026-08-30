@@ -33,12 +33,13 @@ conda activate sapiens_gpu
 ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla
     [ -f "$1" ] && grep -q "^$2,$3,$4," "$1"
 }
-# Este script escribe el CSV del esquema VIEJO, sin columna `fold`.
-ya_evaluado_sinfold() {   # $1=csv  $2=variante  $3=semilla
-    [ -f "$1" ] && grep -q "^$2,$3," "$1"
-}
+# El CSV histórico de este script (fase1_results.csv) tiene el esquema VIEJO, de 9
+# columnas sin `fold`. Pero `eval_fase1_seeds.py` hoy escribe SIEMPRE `fold` como
+# primera columna (11 campos): appendear ahí mezclaría esquemas y `agregar_resultados`
+# reventaría al hacer int(seed) sobre 'gated'. Así que las corridas nuevas van a un
+# CSV propio con el esquema actual, y el viejo queda como registro histórico.
 
-CSV=work_dirs/fase1_seeds/fase1_results.csv
+CSV=work_dirs/fase1_seeds/fase1_results_v2.csv
 mkdir -p work_dirs/fase1_seeds
 
 run () {
@@ -49,8 +50,8 @@ run () {
             --cfg-options randomness.seed=$SEED "$@" > $WD.log 2>&1 \
             || { echo "!!! falló $VAR seed $SEED (ver $WD.log)"; return; }
     fi
-    ya_evaluado_sinfold "$CSV" "$VAR" "$SEED" || python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth \
-        --variant $VAR --seed $SEED --out $CSV 2>&1 | grep "^\[eval\]"
+    ya_evaluado "$CSV" 0 "$VAR" "$SEED" 2 || python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth \
+        --variant $VAR --seed $SEED --fold 0 --out $CSV 2>&1 | grep "^\[eval\]"
 }
 
 BASE=configs/sapiens_mae/lidar/clean10_baseline.py

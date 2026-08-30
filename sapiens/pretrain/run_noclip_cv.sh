@@ -18,14 +18,17 @@
 # --eval-windows 7, o sea con el objetivo recortado y 51 muestras: el protocolo
 # viejo del experimento 15. Sus numeros no son comparables con los 16-18. Este
 # script corre el protocolo vigente (clip_norm=None, norm_scale=10.0, evaluacion
-# sin recorte con 7 ventanas (198 muestras tras el arreglo de alineación del 30/08)) en los folds que faltan.
+# sin recorte con 7 ventanas = 183 muestras tras los arreglos del 30/08) en los folds que faltan.
 #
 # ANTIFUGA. El MAE se re-pre-entrena desde cero en las 8 escenas de train de CADA
 # fold; el decoder de cada fold carga el encoder de SU fold. Verificado antes de
 # generar las configs: ninguna escena de validacion aparece en el train ni en el
 # pre-entrenamiento de su propio fold, y las 10 escenas cubren validacion una vez
 # cada una. El --resume del encoder es seguro: f1cv_mae_fold*.py no tiene
-# load_from que perder (ver el bug de c6c9e05).
+# load_from que perder (ver el bug de c6c9e05). OJO: --resume SÍ falla contra
+# un checkpoint anterior al 30/08, porque el pos-embed del decoder pasó a ser
+# entrenable y el optimizador tiene un param group más (397 -> 398). Los
+# encoders viejos hay que BORRARLOS, no resumirlos.
 #
 # TRES VARIANTES x 8 SEMILLAS por fold, epoca FIJA 100 (sin sesgo de seleccion):
 #   baseline — MLP, sin escena
@@ -55,8 +58,12 @@ ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla  $5=nº de escenas 
     # fila POR ESCENA: si una evaluación previa murió después de la primera, dar
     # la combinación por hecha dejaría el fold con medio resultado, en silencio.
     [ -f "$1" ] || return 1
+    # Si el nº esperado de escenas es 0 —p.ej. porque VAL quedó vacío— NO se puede
+    # concluir "ya evaluado": `[ n -ge 0 ]` es cierto siempre y saltearíamos la
+    # evaluación de un fold entero en silencio, tras horas de entrenamiento.
+    [ "${5:-1}" -gt 0 ] || return 1
     local n; n=$(grep -c "^$2,$3,$4," "$1")
-    [ "$n" -ge "${5:-1}" ]
+    [ "$n" -ge "$5" ]
 }
 D=configs/sapiens_mae/lidar
 CSV=work_dirs/noclipcv/noclipcv_results.csv

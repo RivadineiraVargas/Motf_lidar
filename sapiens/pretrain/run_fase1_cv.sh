@@ -43,8 +43,12 @@ ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla  $5=nº de escenas 
     # fila POR ESCENA: si una evaluación previa murió después de la primera, dar
     # la combinación por hecha dejaría el fold con medio resultado, en silencio.
     [ -f "$1" ] || return 1
+    # Si el nº esperado de escenas es 0 —p.ej. porque VAL quedó vacío— NO se puede
+    # concluir "ya evaluado": `[ n -ge 0 ]` es cierto siempre y saltearíamos la
+    # evaluación de un fold entero en silencio, tras horas de entrenamiento.
+    [ "${5:-1}" -gt 0 ] || return 1
     local n; n=$(grep -c "^$2,$3,$4," "$1")
-    [ "$n" -ge "${5:-1}" ]
+    [ "$n" -ge "$5" ]
 }
 D=configs/sapiens_mae/lidar
 CSV=work_dirs/f1cv/f1cv_results.csv
@@ -65,6 +69,7 @@ for F in 0 1 2 3 4; do
     VAL=$(python3 -c "
 import re;t=open('$D/f1cv_mae_fold${F}.py').read()
 print(' '.join(v.strip().strip(\"'\") for v in re.search(r'val RETENIDA del fold \d+: \[(.*?)\]',t).group(1).split(',')))")
+    [ -n "$VAL" ] || { echo "!!! fold $F: no pude leer las escenas de validacion — salteo"; continue; }
 
     for S in 0 1 2 3 4 5 6 7; do
         for V in baseline gate0 gated; do
