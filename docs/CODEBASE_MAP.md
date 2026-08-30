@@ -1,6 +1,6 @@
 ---
 last_mapped: 2026-08-30T04:05:00Z
-total_files: 177
+total_files: 179
 total_tokens: 192000
 ---
 
@@ -8,7 +8,7 @@ total_tokens: 192000
 
 > Generado por Cartographer con cuatro agentes en paralelo. Último mapeo: 2026-08-30. Modo actualización: auditoría del código nuevo.
 
-**Alcance.** Este mapa cubre el **código propio del proyecto**: 177 archivos, ~192k
+**Alcance.** Este mapa cubre el **código propio del proyecto**: 179 archivos, ~192k
 tokens. Deja fuera a propósito el `mmpretrain` vendido (cientos de archivos de
 ImageNet, CLIP, BLIP, ViG y demás que nunca tocamos) y los datasets. Si buscás algo
 que no está acá, probablemente sea código de Sapiens sin modificar.
@@ -19,7 +19,8 @@ que no está acá, probablemente sea código de Sapiens sin modificar.
 | Pipeline de datos | 23 | `utilities/` |
 | Scripts de experimentos | 59 | `sapiens/pretrain/*.{py,sh}` |
 | Núcleo MOTF | 13 | `sapiens/pretrain/mmpretrain/{datasets,models}/` |
-| Configs de experimentos | 70 | `sapiens/pretrain/configs/sapiens_mae/lidar/` |
+| Configs de experimentos | 70 |
+| Hooks de Claude Code | 2 | `.claude/hooks/` | `sapiens/pretrain/configs/sapiens_mae/lidar/` |
 
 ---
 
@@ -390,6 +391,24 @@ work_dirs/noclipcv/noclipcv_results.csv --por-fold`.
 vigentes. El `predictions_global.txt` del repositorio es del **18 de agosto** y viene
 del track decoder_mini, no de Fase 1. Lo que muestra el visor **no es el modelo del que
 hablan los resultados actuales**.
+
+---
+
+## Automatización (hooks)
+
+Dos reglas del proyecto están puestas en el sistema, no en la memoria de nadie
+(`.claude/settings.json`, versionado):
+
+| hook | qué hace |
+|---|---|
+| `Stop` → `versionar_resultados.py` | busca `work_dirs/**/*results*.csv` sin versionar o modificados y los prepara con `git add -f`. Nace de que `jm_results.csv` se quedó fuera de git y existía solo en este disco |
+| `PreToolUse` (Write\|Edit) → `proteger_resultados.py` | rechaza escribir o editar `.csv`/`.pth` dentro de `work_dirs/`. Esos archivos los generan los scripts por Bash, así que un Write ahí solo puede ser un error |
+
+En `.claude/settings.local.json` (no versionado, específico de esta máquina) hay
+además notificaciones de escritorio con `notify-send` para pedidos de permiso e
+inactividad — útil porque los entrenamientos duran horas.
+
+**Ojo:** `jq` no está instalado en esta máquina; los hooks usan `python3`.
 
 ---
 

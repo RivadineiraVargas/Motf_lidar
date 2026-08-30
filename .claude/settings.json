@@ -1,0 +1,31 @@
+{
+  "enabledPlugins": {
+    "hookify@claude-plugins-official": true
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/lcad/lidar_sweep_viewer/.claude/hooks/versionar_resultados.py",
+            "timeout": 30,
+            "statusMessage": "Versionando CSV de resultados…"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/lcad/lidar_sweep_viewer/.claude/hooks/proteger_resultados.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
