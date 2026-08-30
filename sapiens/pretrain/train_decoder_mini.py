@@ -280,7 +280,6 @@ class MiniWayformerGated(nn.Module):
                 self.head_valid(h).squeeze(-1))
 
 
-@torch.no_grad()
 def _enc_id(encoder):
     """Huella corta del encoder, para que el cache de features no mezcle modelos.
 
@@ -301,6 +300,7 @@ def _enc_id(encoder):
         return 'desconocido'
 
 
+@torch.no_grad()
 def encode_sweeps(encoder, scene, ts, dev, cache_dir=None):
     """OJO fork: MAEViT ignora mask=False y siempre enmascara. Con
     mask_ratio=0 conserva TODOS los tokens (permutados, irrelevante para
@@ -361,7 +361,6 @@ def load_frozen_encoder(enc_ckpt, dev):
     mae = MODELS.build({**cfg.model, 'data_preprocessor': cfg.data_preprocessor})
     sd = torch.load(enc_ckpt, map_location='cpu').get('state_dict')
     faltan = mae.load_state_dict(sd, strict=False)
-    mae._motf_ckpt = str(ckpt)
     # strict=False acepta en silencio un checkpoint que no case en NADA
     # (prefijos cambiados, arquitectura distinta) y deja el encoder
     # aleatorio produciendo un ADE plausible. Es exactamente lo que pasó
@@ -369,9 +368,11 @@ def load_frozen_encoder(enc_ckpt, dev):
     cargadas = len(sd) - len(getattr(faltan, 'unexpected_keys', []))
     if cargadas <= 0:
         raise RuntimeError(
-            f'{ckpt}: ninguna clave del checkpoint coincidió con el encoder. '
+            f'{enc_ckpt}: ninguna clave del checkpoint coincidió con el encoder. '
             'Correr así entrena sobre un encoder ALEATORIO.')
     encoder = mae.backbone.to(dev)
+    # _enc_id lee esto: tiene que ir en el MISMO objeto que recibe.
+    encoder._motf_ckpt = str(enc_ckpt)
     encoder.eval()          # OJO: este fork retorna None en .eval(), no encadenar
     for p in encoder.parameters():
         p.requires_grad = False
@@ -501,6 +502,7 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
     suffix = '' if arch == 'wayformer' else f'_{arch}'
     best_path = f'{out_dir}/decoder_mini{suffix}.pth'
     best_metrics = None
+    final_metrics = None
     param_groups = [{'params': [q for q in model.parameters() if q.requires_grad],
                      'lr': lr}]
     if finetuning:

@@ -50,8 +50,13 @@ conda activate sapiens_gpu
 # filas, y una sola fila duplicada mueve la media ponderada ~19%. Condicionarlo a
 # NUEVO=1 no alcanzaba: si el corte cae entre entrenar y evaluar, el checkpoint
 # existe y la fila nunca se escribiría. La fuente de verdad es el CSV.
-ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla
-    [ -f "$1" ] && grep -q "^$2,$3,$4," "$1"
+ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla  $5=nº de escenas esperadas
+    # Exige que estén TODAS las filas, no una. `eval_fase1_seeds.py` escribe una
+    # fila POR ESCENA: si una evaluación previa murió después de la primera, dar
+    # la combinación por hecha dejaría el fold con medio resultado, en silencio.
+    [ -f "$1" ] || return 1
+    local n; n=$(grep -c "^$2,$3,$4," "$1")
+    [ "$n" -ge "${5:-1}" ]
 }
 D=configs/sapiens_mae/lidar
 CSV=work_dirs/noclipcv/noclipcv_results.csv
@@ -97,7 +102,7 @@ print(' '.join(re.findall(r\"'([0-9a-f]{16})'\", m.group(1))))")
                     --cfg-options randomness.seed=$S $OPT > $WD.log 2>&1 \
                     || { echo "!!! fallo $V fold $F semilla $S"; continue; }
             fi
-            ya_evaluado $CSV $F $V $S || python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth \
+            ya_evaluado $CSV $F $V $S $(echo $VAL | wc -w) || python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth \
                 --variant $V --seed $S --fold $F --val-scenes $VAL \
                 --eval-windows 7 --sin-clip --out $CSV 2>&1 | grep "^\[eval\]"
         done

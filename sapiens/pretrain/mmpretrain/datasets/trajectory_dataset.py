@@ -103,6 +103,10 @@ class TrajectoryDataset(BaseDataset):
                 d for d in os.listdir(scene_bbox)
                 if os.path.isdir(os.path.join(scene_bbox, d)) and d.isdigit()
             ])
+            bins_dir = os.path.join(self.data_root, 'bin_files', scene)
+            n_sweeps_escena = len([f for f in os.listdir(bins_dir)
+                                   if f.endswith('.bin')]) \
+                if os.path.isdir(bins_dir) else 0
             if len(frame_dirs) < self.sequence_len:
                 continue
 
@@ -134,7 +138,7 @@ class TrajectoryDataset(BaseDataset):
                     )
 
             n_dropped = 0
-            n_desalineados = 0
+            n_huecos = 0
             for obj_id, track in object_tracks.items():
                 track.sort(key=lambda x: x[0])
                 frames    = [f for f, _, _ in track]
@@ -153,7 +157,12 @@ class TrajectoryDataset(BaseDataset):
                 # frames sobre 11 disponibles.
                 # Ahora cada ventana lleva `frame0`, el frame absoluto real donde
                 # empieza, y __getitem__ carga la escena desde ahí.
-                n_lidar = getattr(self, 'n_lidar_frames', 11)
+                # Cuántos sweeps de LiDAR tiene la escena. Se cuenta del disco
+                # en vez de asumir 11: de este número depende que __getitem__
+                # no pida un .bin inexistente, y con el arreglo de alineación
+                # `f0` ya no es siempre 0, así que la suposición pasó a ser
+                # load-bearing.
+                n_lidar = n_sweeps_escena
                 ventanas = 0
                 for k in range(len(centers) - self.sequence_len + 1):
                     if ventanas >= self.eval_windows:
@@ -165,9 +174,15 @@ class TrajectoryDataset(BaseDataset):
                     # El tramo con LiDAR debe ser contiguo en frames absolutos: si
                     # el track tiene huecos, la "historia" abarcaría más tiempo del
                     # que dice y no alinearía con los sweeps.
-                    tramo = frames[k:k + self.history_len]
-                    if tramo != list(range(f0, f0 + self.history_len)):
-                        n_desalineados += 1
+                    # Contigüidad de TODA la ventana, no solo del histórico. El
+                    # tramo con LiDAR tiene que alinear con los sweeps, pero el
+                    # futuro también: si el objeto tiene un hueco de etiquetado, el
+                    # "futuro a 3 s" abarca más tiempo del que dice y los Δt dejan
+                    # de ser uniformes. Medido antes de este arreglo: 15 de 198
+                    # ventanas (7,6%) tenían hueco en el tramo futuro.
+                    tramo = frames[k:k + self.sequence_len]
+                    if tramo != list(range(f0, f0 + self.sequence_len)):
+                        n_huecos += 1
                         continue
                     # Filtro de consistencia POR VENTANA (antes solo miraba la
                     # primera): un track que se corrompe más adelante pasaba el
@@ -187,9 +202,12 @@ class TrajectoryDataset(BaseDataset):
                     })
                     ventanas += 1
 
+            if n_huecos:
+                print(f'[TrajectoryDataset] escena {scene}: {n_huecos} ventanas '
+                      f'descartadas por hueco de etiquetado (no contiguas)')
             if n_dropped:
-                print(f'[TrajectoryDataset] cena {scene}: {n_dropped} tracks '
-                      f'descartados por salto > {self.max_jump}m (bug de associação)')
+                print(f'[TrajectoryDataset] cena {scene}: {n_dropped} ventanas '
+                      f'descartadas por salto > {self.max_jump}m (bug de associação)')
 
         return data_list
 

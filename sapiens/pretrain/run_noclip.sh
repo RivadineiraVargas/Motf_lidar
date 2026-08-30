@@ -10,8 +10,13 @@ source /home/lcad/miniconda3/etc/profile.d/conda.sh; conda activate sapiens_gpu
 # filas, y una sola fila duplicada mueve la media ponderada ~19%. Condicionarlo a
 # NUEVO=1 no alcanzaba: si el corte cae entre entrenar y evaluar, el checkpoint
 # existe y la fila nunca se escribiría. La fuente de verdad es el CSV.
-ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla
-    [ -f "$1" ] && grep -q "^$2,$3,$4," "$1"
+ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla  $5=nº de escenas esperadas
+    # Exige que estén TODAS las filas, no una. `eval_fase1_seeds.py` escribe una
+    # fila POR ESCENA: si una evaluación previa murió después de la primera, dar
+    # la combinación por hecha dejaría el fold con medio resultado, en silencio.
+    [ -f "$1" ] || return 1
+    local n; n=$(grep -c "^$2,$3,$4," "$1")
+    [ "$n" -ge "${5:-1}" ]
 }
 D=configs/sapiens_mae/lidar; VAL="7e2f727866c69ea0 82f90331a1dfe968"
 mkdir -p work_dirs/noclip
@@ -23,9 +28,9 @@ for S in 0 1 2 3 4 5 6 7; do
       gated)    CFG=$D/noclip_dec_fold0.py;  OPT="model.gate_init=0.5" ;;
     esac
     WD=work_dirs/noclip/${V}_f0s${S}
-    NUEVO=0; [ -f "$WD/epoch_100.pth" ] || { NUEVO=1; } ; [ $NUEVO -eq 1 ] && python -u tools/train.py $CFG --work-dir $WD \
+    [ -f "$WD/epoch_100.pth" ] || python -u tools/train.py $CFG --work-dir $WD \
         --cfg-options randomness.seed=$S $OPT > $WD.log 2>&1 || { echo "!!! fallo $V s$S"; continue; }
-    ya_evaluado work_dirs/noclip/noclip_results.csv 0 $V $S || python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth --variant $V \
+    ya_evaluado work_dirs/noclip/noclip_results.csv 0 $V $S 2 || python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth --variant $V \
         --seed $S --fold 0 --val-scenes $VAL --eval-windows 7 --sin-clip \
         --out work_dirs/noclip/noclip_results.csv 2>&1 | grep "^\[eval\]"
   done

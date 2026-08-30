@@ -175,3 +175,76 @@ pos-embed pasó de ceros a aprendible, así que hay que reentrenar los encoders)
 
 Prueba de humo tras los arreglos: `noclip_dec_fold0`, 2 épocas, pérdida
 0,2949 -> 0,2441, 0,48 s/paso, 1435 MiB. Entrena sano.
+
+
+---
+
+## Segunda vuelta: la revisión encontró que MIS arreglos rompieron cuatro cosas
+
+Se corrió `/code-review` sobre los arreglos. Encontró 12 hallazgos nuevos, cuatro
+de ellos introducidos por mí al arreglar los anteriores. **Tres eran bloqueantes.**
+
+### El crítico: mi arreglo del pos-embed era un no-op
+
+Puse `requires_grad_(True)` dentro de `init_weights()`. Pero mmengine arma el
+optimizador (`Runner.train` -> `build_optim_wrapper`) **antes** de llamar a
+`_init_model_weights()`, y `DefaultOptimWrapperConstructor.add_params` descarta con
+`continue` todo parámetro con `requires_grad=False`. **Verificado en el entorno
+real**: el tensor nunca entraba al optimizador.
+
+O sea que el pos-embed pasaba de ceros a ruido fijo, y el log seguía diciendo
+"APRENDIBLE" — exactamente la misma mentira del hallazgo original. Los cinco
+encoders de la CV se habrían pre-entrenado mal, sin que nada fallara ni avisara.
+**Habría costado las 26 horas en silencio.**
+
+Arreglado decidiendo `requires_grad` en `__init__`. Verificado: en vóxeles
+`requires_grad=True` y **entra al optimizador**; en grilla cuadrada queda fijo con
+el sincos, como corresponde.
+
+### Los otros tres bloqueantes
+
+**El guard de bash se saltaba la evaluación.** Mi patrón
+`[ $NUEVO -eq 1 ] && python train || { echo fallo; continue; }` hace que, con el
+checkpoint ya presente, el `&&` falle, se dispare el `||`, se imprima un fallo
+falso y el `continue` saltee la evaluación. Probado: nunca evaluaba. Rompía la
+reanudación peor que el bug original.
+
+**`run_fase1_seeds.sh` usaba `$V` y `$S`**, que no existen dentro de esa función
+—sus locales son `$VAR` y `$SEED`—, así que el guard recibía cadenas vacías y no
+bloqueaba nada.
+
+**`mae._motf_ckpt = str(ckpt)`** con el parámetro llamado `enc_ckpt`: `NameError`
+en cada llamada. Y el atributo iba al objeto equivocado (`mae` en vez de
+`mae.backbone`, que es el que recibe `_enc_id`), así que la clave de caché seguía
+sin distinguir encoders.
+
+### También arreglados en esta vuelta
+
+- La contigüidad se verificaba solo en el histórico: **15 de 198 ventanas (7,6%)
+  tenían hueco en el tramo futuro**, o sea un "futuro a 3 s" que abarcaba más
+  tiempo. Ahora se exige contigüidad en toda la ventana.
+- `n_lidar_frames` era un 11 hardcodeado que nunca se definía; ahora se cuenta del
+  disco, porque con la alineación arreglada `f0` ya no es siempre 0.
+- El guard daba por hecha una combinación con una sola fila, cuando el evaluador
+  escribe una por escena: una evaluación muerta a mitad dejaba medio resultado.
+- `encode_sweeps` había perdido su `@torch.no_grad()` al insertar la función nueva.
+- `best_metrics`/`final_metrics` sin guard contra `None`.
+- Los contadores del log decían "tracks" cuando ya contaban ventanas.
+
+### Tamaños finales
+
+| conjunto | original | tras alinear | tras exigir contigüidad |
+|---|---|---|---|
+| entrenamiento | 200 | 252 | **236** |
+| validación (1 ventana) | 51 | 32 | **29** |
+| validación (7 ventanas) | 319 | 198 | **183** |
+
+Pruebas de humo tras todo: decoder 2 épocas (pérdida 0,2921, 0,46 s/paso) y
+**encoder MAE 2 épocas** (pérdida 0,2755, grad_norm 4,89) — este último es el que
+ejercita el pos-embed arreglado.
+
+### La lección
+
+Los arreglos necesitan la misma verificación que los hallazgos. Cuatro de mis doce
+arreglos estaban mal, y el peor no habría fallado: habría entrenado feliz durante
+26 horas produciendo un encoder inútil.

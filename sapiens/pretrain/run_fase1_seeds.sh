@@ -44,14 +44,12 @@ mkdir -p work_dirs/fase1_seeds
 run () {
     VAR=$1; CFG=$2; SEED=$3; shift 3
     WD=work_dirs/fase1_seeds/${VAR}_s${SEED}
-    NUEVO=0
-            if [ ! -f "$WD/epoch_100.pth" ]; then
-                NUEVO=1
+    if [ ! -f "$WD/epoch_100.pth" ]; then
         python -u tools/train.py $CFG --work-dir $WD \
             --cfg-options randomness.seed=$SEED "$@" > $WD.log 2>&1 \
             || { echo "!!! falló $VAR seed $SEED (ver $WD.log)"; return; }
     fi
-    ya_evaluado_sinfold work_dirs/fase1_seeds/fase1_results.csv $V $S || python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth \
+    ya_evaluado_sinfold "$CSV" "$VAR" "$SEED" || python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth \
         --variant $VAR --seed $SEED --out $CSV 2>&1 | grep "^\[eval\]"
 }
 

@@ -77,9 +77,29 @@ class MAEPretrainDecoder(BaseModule):
 
         # create new position embedding, different from that in encoder
         # and is not learnable
+        # requires_grad SE DECIDE ACÁ, no en init_weights(). mmengine arma el
+        # optimizador (Runner.train -> build_optim_wrapper) ANTES de llamar a
+        # _init_model_weights(), y DefaultOptimWrapperConstructor.add_params
+        # descarta con `continue` todo parámetro con requires_grad=False. Poner
+        # requires_grad_(True) dentro de init_weights es un NO-OP: el tensor nunca
+        # entra al optimizador. (Verificado el 30/08 tras que la revisión lo
+        # cazara: mi primer arreglo del hallazgo 2 tenía justamente ese defecto.)
+        #
+        # Si el sincos 2D va a aplicar, el embedding es FIJO (requires_grad=False,
+        # como en el MAE original). Si la grilla no es 2D —los 300 tokens de
+        # vóxeles no forman un cuadrado— no hay sincos que poner, así que tiene
+        # que ser APRENDIBLE; si no, se queda en ceros y todo token enmascarado
+        # entra al decoder como `mask_token + 0`, indistinguible de los demás.
+        grid_ini = patch_resolution if patch_resolution is not None \
+            else int(self.num_patches**.5)
+        if isinstance(grid_ini, int):
+            n_sincos = grid_ini * grid_ini + 1
+        else:
+            n_sincos = grid_ini[0] * grid_ini[1] + 1
+        self._pos_embed_aprendible = (n_sincos != self.num_patches + 1)
         self.decoder_pos_embed = nn.Parameter(
             torch.zeros(1, self.num_patches + 1, decoder_embed_dim),
-            requires_grad=False)
+            requires_grad=self._pos_embed_aprendible)
         
         self.decoder_blocks = nn.ModuleList([
             TransformerEncoderLayer(
@@ -130,7 +150,9 @@ class MAEPretrainDecoder(BaseModule):
             # decoder_pos_embed documentado del MAE del colega.
             # Ahora se vuelve aprendible de verdad, con la inicialización estándar
             # de MAE para embeddings de posición aprendidos (normal truncada 0.02).
-            self.decoder_pos_embed.requires_grad_(True)
+            # requires_grad ya quedó en True desde __init__ (ver allí el porqué).
+            assert self.decoder_pos_embed.requires_grad, \
+                'el pos-embed del decoder debería ser aprendible en esta rama'
             torch.nn.init.trunc_normal_(self.decoder_pos_embed, std=.02)
             from mmengine.logging import MMLogger
             MMLogger.get_current_instance().info(
