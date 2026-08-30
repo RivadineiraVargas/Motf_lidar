@@ -333,7 +333,10 @@ def main():
             if len(efectos) < 2:
                 continue
             m, sd = st.mean(efectos), st.stdev(efectos)
-            t = m / (sd / math.sqrt(len(efectos))) if sd else float('inf')
+            # Mismo criterio que t_pareado: sd=0 con m=0 es un empate exacto
+            # (t=0, p=1), no un efecto infinitamente significativo.
+            t = (m / (sd / math.sqrt(len(efectos))) if sd
+                 else (float('inf') if m else 0.0))
             p = p_dos_colas(t, len(efectos) - 1) if math.isfinite(t) else 0.0
             print(f'  {a} − {b:<12} {m:+8.3f} ± {sd:5.3f}  t={t:+6.2f}  '
                   f'p={p:.4f}  {sum(1 for e in efectos if e < 0)}/{len(efectos)} folds')
