@@ -1,12 +1,12 @@
 ---
-last_mapped: 2026-08-30T03:17:00Z
+last_mapped: 2026-08-30T04:05:00Z
 total_files: 177
 total_tokens: 192000
 ---
 
 # Mapa del código — MOTF
 
-> Generado por Cartographer con cuatro agentes en paralelo. Último mapeo: 2026-08-30.
+> Generado por Cartographer con cuatro agentes en paralelo. Último mapeo: 2026-08-30. Modo actualización: auditoría del código nuevo.
 
 **Alcance.** Este mapa cubre el **código propio del proyecto**: 177 archivos, ~192k
 tokens. Deja fuera a propósito el `mmpretrain` vendido (cientos de archivos de
@@ -275,37 +275,45 @@ Ordenadas por lo que cuesta descubrirlas de nuevo.
    termine, ningún número de Fase 1 tiene respaldo entre splits.
 2. **Agregar los CSV solo con `agregar_resultados.py`**, nunca a mano: la convención
    de promediado cambia el ADE absoluto un 7%.
-3. **`--resume` anula `load_from`** (`tools/train.py:111`). El arreglo del commit
+3. **La evaluación se llama FUERA del guard de reanudación** en todos los `run_*.sh`
+   (`run_noclip_cv.sh:88`, y lo mismo en `run_noclip.sh`, `run_geo.sh`,
+   `run_jointmotion.sh`), y `eval_fase1_seeds.py:91` abre el CSV en modo `'a'` sin
+   comprobar si la fila ya existe. **Relanzar una corrida cortada duplica filas.**
+   Una sola fila duplicada mueve la media ponderada ~19%. Verificado el 30/08: los
+   CSV existentes están limpios, el bug es latente. `agregar_resultados.py` ya
+   deduplica al leer y avisa; falta arreglar el lado de escritura — hacerlo cuando
+   termine la corrida en curso, para no tocar un evaluador que se está invocando.
+4. **`--resume` anula `load_from`** (`tools/train.py:111`). El arreglo del commit
    `c6c9e05` fue quitar la bandera de los scripts, **no** parchear la herramienta:
    la mina sigue armada para quien la vuelva a agregar.
-4. **`ref_center` es inconsistente entre los dos datasets bajo augmentación.** En
+5. **`ref_center` es inconsistente entre los dos datasets bajo augmentación.** En
    vóxeles se calcula **antes** de rotar (`trajectory_dataset.py:248` vs la llamada en
    la 263); en range-view, después. Hoy es inofensivo porque todos los consumidores
    corren con `augment=False` (`eval_fase1_seeds.py:62`, y los exportadores usan el
    default), pero cualquier evaluación con augmentación daría posiciones absolutas
    incoherentes.
-5. **`mask_ratio` en la config del dataset no hace nada.** `lidar_sequence.py:31` lo
+6. **`mask_ratio` en la config del dataset no hace nada.** `lidar_sequence.py:31` lo
    guarda y nunca lo usa; el enmascarado real lee el del backbone. Los dos valores
    conviven sin estar atados.
-6. **`history_len` en `MAEViT4D` no significa "cantidad de frames"** en el camino de
+7. **`history_len` en `MAEViT4D` no significa "cantidad de frames"** en el camino de
    range-view — es la dimensión del parche aplanado (`256·history_len`).
-7. **`MAEViT.eval()` devuelve `None`** en este fork. Nunca encadenar `.to(dev).eval()`.
-8. **El encoder devuelve los tokens permutados en cada llamada** si no se fija la
+8. **`MAEViT.eval()` devuelve `None`** en este fork. Nunca encadenar `.to(dev).eval()`.
+9. **El encoder devuelve los tokens permutados en cada llamada** si no se fija la
    semilla: 69,3% de diferencia elemento a elemento sin semilla, 0,000% con ella.
-9. **`_encode_scene` duplica a mano** el forward sin enmascarar que `MAEViT4D.forward`
+10. **`_encode_scene` duplica a mano** el forward sin enmascarar que `MAEViT4D.forward`
    ya implementa en su rama de evaluación. Dos implementaciones del mismo cálculo: si
    se cambia una, hay que cambiar la otra.
-10. **El decoder MAE del camino de vóxeles no recibe pos-embed sincos** (grilla de 300
+11. **El decoder MAE del camino de vóxeles no recibe pos-embed sincos** (grilla de 300
    tokens, no cuadrada). Es deliberado, para preservar comparabilidad con el encoder
    del 15/06.
-11. **`mae_neck2.py` es una copia sin ese fix** — usarla con 300 tokens revienta en
+12. **`mae_neck2.py` es una copia sin ese fix** — usarla con 300 tokens revienta en
     `init_weights()` por desajuste de forma.
-12. **`TrajectoryPredictionModel` tiene un bug de forma**: las capas intermedias están
+13. **`TrajectoryPredictionModel` tiene un bug de forma**: las capas intermedias están
     fijas en 512 pero la última usa `hidden_dim` (default 256). Solo funciona con
     `hidden_dim=512`. Está huérfano, así que no muerde.
-13. **`RangeViewTrajectoryDataset` sigue exigiendo `bin_files`** aunque su
+14. **`RangeViewTrajectoryDataset` sigue exigiendo `bin_files`** aunque su
     `__getitem__` lea `range_files` — hereda `load_data_list` sin sobrescribirlo.
-14. **`eval_windows` y `max_windows` solo deben usarse donde corresponde**
+15. **`eval_windows` y `max_windows` solo deben usarse donde corresponde**
     (`eval_windows` en evaluación, `max_windows` en pre-entrenamiento). Ningún assert
     lo impide.
 
@@ -342,7 +350,9 @@ python agregar_resultados.py work_dirs/f1cv/f1cv_results.csv --por-fold
 
 `--peso objetos` (default) pondera por número de objetos; `--peso escena` da la media
 simple que se usó hasta ahora. También `--poblacion moviles`, `--metrica fde`,
-`--comparar A:B`. El cálculo de `p` es una beta incompleta propia — validada contra
+`--comparar A:B`. Deduplica filas repetidas, verifica que todas las corridas de un
+fold cubran las mismas escenas y tolera celdas vacías, avisando en los tres casos.
+El cálculo de `p` es una beta incompleta propia — validada contra
 scipy a 1e-15 — para que corra en `sapiens_gpu`, que no tiene scipy.
 
 ### Y lo que el agregador encontró al primer uso: TODO ES UN SOLO FOLD

@@ -120,27 +120,98 @@ def t_pareado(a, b):
 
 # ------------------------------------------------------------------- lectura
 def leer(paths, metrica, poblacion):
-    """-> {(fold, variante, semilla): (valor_agregado, gate)} y el conteo de escenas."""
+    """-> ({(fold, variante, semilla): [(valor, n, escena)]}, gates, escenas, avisos).
+
+    Tres defensas que la auditoría del 30/08 encontró que faltaban:
+
+    (a) DUPLICADOS. `eval_fase1_seeds.py` abre el CSV en modo 'a' y no comprueba si
+        ya existe la fila; los scripts `run_*.sh` llaman a la evaluación FUERA del
+        guard `[ -f epoch_100.pth ]`. O sea que relanzar una corrida cortada —el
+        escenario que los scripts dicen soportar— reevalúa lo ya hecho y duplica
+        filas. Una sola fila duplicada mueve la media ponderada ~19%. Acá se
+        deduplica por (fold, variante, semilla, escena) quedándose con la ÚLTIMA
+        aparición, y se avisa fuerte.
+
+    (b) COBERTURA DESPAREJA. Si a una corrida le falta una escena (crash a mitad de
+        evaluación), promediarla contra corridas completas compara peras con
+        manzanas. Se verifica que toda corrida de un fold cubra las mismas escenas.
+
+    (c) CELDAS VACÍAS. El evaluador escribe '' en `ade_moving` cuando la escena no
+        tiene ningún objeto que se desplace más de 1 m — y documenta que el 60-75%
+        no se desplaza. Con --poblacion moviles eso reventaba con un ValueError
+        opaco. Ahora se saltea la escena avisando.
+    """
     col = f'{metrica}_{"moving" if poblacion == "moviles" else "all"}'
     col_n = 'n_moving' if poblacion == 'moviles' else 'n_obj'
+    ultima = {}          # (fold, variante, semilla, escena) -> (valor, n, gate)
+    orden = []
+    dups = 0
+    vacias = []
+    for path in paths:
+        with open(path) as fh:
+            rdr = csv.DictReader(fh)
+            cols = rdr.fieldnames or []
+            if col not in cols:
+                raise SystemExit(
+                    f'{path}: no tiene la columna {col}. ¿Es un CSV de '
+                    f'eval_fase1_seeds.py? Columnas: {", ".join(cols)}')
+            # Los CSV viejos (fase1_results.csv, exp. 15) no traen `fold`: es el 0.
+            hay_fold = 'fold' in cols
+            for r in rdr:
+                clave = (int(r['fold']) if hay_fold else 0,
+                         r['variant'], int(r['seed']), r['scene'])
+                if r[col] == '' or r[col_n] in ('', '0'):
+                    vacias.append(clave)
+                    continue
+                if clave in ultima:
+                    dups += 1
+                else:
+                    orden.append(clave)
+                try:
+                    g = float(r['gate'])
+                except (ValueError, KeyError):
+                    g = float('nan')
+                ultima[clave] = (float(r[col]), int(r[col_n]), g)
+
+    avisos = []
+    if dups:
+        avisos.append(
+            f'!! {dups} fila(s) DUPLICADA(S) por (fold, variante, semilla, escena). '
+            'Se usó la última de cada una. Causa casi segura: se relanzó una corrida '
+            'cortada y la evaluación volvió a correr sobre checkpoints ya existentes.')
+    if vacias:
+        ej = ', '.join(f'{f}/{v}/s{s}/{e[:8]}' for f, v, s, e in vacias[:3])
+        avisos.append(
+            f'!! {len(vacias)} escena(s) sin dato en `{col}` — se excluyen. Ej: {ej}'
+            + ('  (con --poblacion moviles esto pasa cuando ninguna trayectoria de la '
+               'escena se desplaza más de 1 m)' if poblacion == 'moviles' else ''))
+
     crudo = defaultdict(list)
     gates = {}
     escenas = set()
-    for path in paths:
-        with open(path) as fh:
-            for r in csv.DictReader(fh):
-                if col not in r:
-                    raise SystemExit(
-                        f'{path}: no tiene la columna {col}. ¿Es un CSV de '
-                        f'eval_fase1_seeds.py? Columnas: {", ".join(r)}')
-                clave = (int(r['fold']), r['variant'], int(r['seed']))
-                crudo[clave].append((float(r[col]), int(r[col_n])))
-                escenas.add(r['scene'])
-                try:
-                    gates[clave] = float(r['gate'])
-                except (ValueError, KeyError):
-                    gates[clave] = float('nan')
-    return crudo, gates, escenas
+    for clave in orden:
+        if clave not in ultima:
+            continue
+        f, v, s, e = clave
+        val, n, g = ultima[clave]
+        crudo[(f, v, s)].append((val, n, e))
+        gates[(f, v, s)] = g
+        escenas.add(e)
+
+    # (b) cobertura pareja: dentro de cada fold, toda corrida debe cubrir lo mismo.
+    por_fold = defaultdict(set)
+    for (f, _, _), filas in crudo.items():
+        por_fold[f] |= {e for _, _, e in filas}
+    for (f, v, s), filas in sorted(crudo.items()):
+        faltan = por_fold[f] - {e for _, _, e in filas}
+        if faltan:
+            avisos.append(
+                f'!! fold {f} / {v} / semilla {s} cubre '
+                f'{len(filas)} de {len(por_fold[f])} escenas — le falta(n) '
+                f'{", ".join(sorted(x[:8] for x in faltan))}. NO es comparable con las '
+                'corridas completas; volver a evaluar esa corrida antes de publicar.')
+
+    return crudo, gates, escenas, avisos
 
 
 def agregar(crudo, peso):
@@ -148,10 +219,10 @@ def agregar(crudo, peso):
     out = {}
     for clave, filas in crudo.items():
         if peso == 'objetos':
-            total = sum(n for _, n in filas)
-            out[clave] = (sum(v * n for v, n in filas) / total) if total else float('nan')
+            total = sum(n for _, n, _ in filas)
+            out[clave] = (sum(v * n for v, n, _ in filas) / total) if total else float('nan')
         else:
-            out[clave] = st.mean([v for v, _ in filas])
+            out[clave] = st.mean([v for v, _, _ in filas])
     return out
 
 
@@ -203,7 +274,7 @@ def main():
     args = ap.parse_args()
 
     paths = sorted({p for patron in args.csv for p in glob.glob(patron)} or set(args.csv))
-    crudo, gates, escenas = leer(paths, args.metrica, args.poblacion)
+    crudo, gates, escenas, avisos = leer(paths, args.metrica, args.poblacion)
     if not crudo:
         raise SystemExit('no se leyó ninguna fila')
     vals = agregar(crudo, args.peso)
@@ -212,7 +283,7 @@ def main():
     variantes = sorted({v for _, v, _ in vals})
     semillas = sorted({s for _, _, s in vals})
     celdas = sorted({(f, s) for f, _, s in vals})
-    n_esc = len(next(iter(crudo.values())))
+    n_esc = max(len(f) for f in crudo.values())
 
     # La convención va ANTES de la tabla, siempre. Es la regla de este proyecto.
     print('=' * 78)
@@ -227,6 +298,11 @@ def main():
     print(f'  muestreo    : {len(folds)} fold(s) {folds} × {len(semillas)} semillas '
           f'× {n_esc} escena(s) de validación')
     print(f'  escenas     : {", ".join(sorted(escenas))}')
+    for a in avisos:
+        for linea in [a[i:i + 74] for i in range(0, len(a), 74)]:
+            print(f'  {linea}')
+    if avisos:
+        print('  ' + '-' * 74)
     if len(folds) == 1:
         print('  AVISO: UN SOLO FOLD. La varianza entre folds es ~3x la de semillas.')
         print('         Un t grande acá NO autoriza a concluir. Ver')
