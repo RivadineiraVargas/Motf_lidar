@@ -1,6 +1,6 @@
 ---
 last_mapped: 2026-08-30T03:17:00Z
-total_files: 167
+total_files: 168
 total_tokens: 192000
 ---
 
@@ -8,7 +8,7 @@ total_tokens: 192000
 
 > Generado por Cartographer con cuatro agentes en paralelo. Último mapeo: 2026-08-30.
 
-**Alcance.** Este mapa cubre el **código propio del proyecto**: 167 archivos, ~192k
+**Alcance.** Este mapa cubre el **código propio del proyecto**: 168 archivos, ~192k
 tokens. Deja fuera a propósito el `mmpretrain` vendido (cientos de archivos de
 ImageNet, CLIP, BLIP, ViG y demás que nunca tocamos) y los datasets. Si buscás algo
 que no está acá, probablemente sea código de Sapiens sin modificar.
@@ -17,7 +17,7 @@ que no está acá, probablemente sea código de Sapiens sin modificar.
 |---|---|---|
 | Visor C++ | 10 | raíz del repo |
 | Pipeline de datos | 23 | `utilities/` |
-| Scripts de experimentos | 57 | `sapiens/pretrain/*.{py,sh}` |
+| Scripts de experimentos | 58 | `sapiens/pretrain/*.{py,sh}` |
 | Núcleo MOTF | 13 | `sapiens/pretrain/mmpretrain/{datasets,models}/` |
 | Configs de experimentos | 62 | `sapiens/pretrain/configs/sapiens_mae/lidar/` |
 
@@ -77,7 +77,7 @@ números es un error que ya se cometió y produjo afirmaciones falsas.
 | **decoder_mini / Wayformer** | ago 4–18 | `waymo_clean` 25 escenas, range-view rect | `train_decoder_mini.py`, 6785 tokens | `reeval_holdout.py` | paralelo, **congelado** |
 | **Fase 1 CV** | ago 23–28 | `waymo_clean` 10 escenas, vóxeles 300 tok / range-view 128 tok | configs `f1cv_*`, `noclip_*`, `geo_*` | **`eval_fase1_seeds.py`** | **VIGENTE** |
 
-De los 57 scripts, **32 están obsoletos**. La tabla completa está más abajo.
+De los 58 scripts, **32 están obsoletos**. La tabla completa está más abajo.
 
 ---
 
@@ -203,6 +203,7 @@ byte a byte salvo el `work_dir`.
 | script | qué hace |
 |---|---|
 | `eval_fase1_seeds.py` | **el evaluador**. Separa móviles de parados, agrega por escena |
+| `agregar_resultados.py` | **el agregador**. Lee los CSV, declara la convención, hace los t pareados |
 | `run_fase1_cv.sh` | CV de 5 folds × 8 semillas × 3 variantes |
 | `run_noclip.sh` | fold 0 sin recorte del objetivo |
 | `run_geo.sh` | encoder con objetivo geométrico |
@@ -268,40 +269,41 @@ Dependencias en `requirements.txt`: `tensorflow[and_cuda]`,
 
 Ordenadas por lo que cuesta descubrirlas de nuevo.
 
-1. **No hay ningún script que agregue los CSV del evaluador vigente.** Ninguno los
-   lee. Todos los números publicados del proyecto — incluidos los de la reunión —
-   se calcularon a mano, fuera del repositorio. Ver la sección siguiente.
-2. **`--resume` anula `load_from`** (`tools/train.py:111`). El arreglo del commit
+1. **Todos los resultados vigentes son de UN SOLO FOLD** (el 0). La CV de 5 folds de
+   Fase 1 nunca se corrió. Ver la sección del hueco de reproducibilidad.
+2. **Agregar los CSV solo con `agregar_resultados.py`**, nunca a mano: la convención
+   de promediado cambia el ADE absoluto un 7%.
+3. **`--resume` anula `load_from`** (`tools/train.py:111`). El arreglo del commit
    `c6c9e05` fue quitar la bandera de los scripts, **no** parchear la herramienta:
    la mina sigue armada para quien la vuelva a agregar.
-3. **`ref_center` es inconsistente entre los dos datasets bajo augmentación.** En
+4. **`ref_center` es inconsistente entre los dos datasets bajo augmentación.** En
    vóxeles se calcula **antes** de rotar (`trajectory_dataset.py:248` vs la llamada en
    la 263); en range-view, después. Hoy es inofensivo porque todos los consumidores
    corren con `augment=False` (`eval_fase1_seeds.py:62`, y los exportadores usan el
    default), pero cualquier evaluación con augmentación daría posiciones absolutas
    incoherentes.
-4. **`mask_ratio` en la config del dataset no hace nada.** `lidar_sequence.py:31` lo
+5. **`mask_ratio` en la config del dataset no hace nada.** `lidar_sequence.py:31` lo
    guarda y nunca lo usa; el enmascarado real lee el del backbone. Los dos valores
    conviven sin estar atados.
-5. **`history_len` en `MAEViT4D` no significa "cantidad de frames"** en el camino de
+6. **`history_len` en `MAEViT4D` no significa "cantidad de frames"** en el camino de
    range-view — es la dimensión del parche aplanado (`256·history_len`).
-6. **`MAEViT.eval()` devuelve `None`** en este fork. Nunca encadenar `.to(dev).eval()`.
-7. **El encoder devuelve los tokens permutados en cada llamada** si no se fija la
+7. **`MAEViT.eval()` devuelve `None`** en este fork. Nunca encadenar `.to(dev).eval()`.
+8. **El encoder devuelve los tokens permutados en cada llamada** si no se fija la
    semilla: 69,3% de diferencia elemento a elemento sin semilla, 0,000% con ella.
-8. **`_encode_scene` duplica a mano** el forward sin enmascarar que `MAEViT4D.forward`
+9. **`_encode_scene` duplica a mano** el forward sin enmascarar que `MAEViT4D.forward`
    ya implementa en su rama de evaluación. Dos implementaciones del mismo cálculo: si
    se cambia una, hay que cambiar la otra.
-9. **El decoder MAE del camino de vóxeles no recibe pos-embed sincos** (grilla de 300
+10. **El decoder MAE del camino de vóxeles no recibe pos-embed sincos** (grilla de 300
    tokens, no cuadrada). Es deliberado, para preservar comparabilidad con el encoder
    del 15/06.
-10. **`mae_neck2.py` es una copia sin ese fix** — usarla con 300 tokens revienta en
+11. **`mae_neck2.py` es una copia sin ese fix** — usarla con 300 tokens revienta en
     `init_weights()` por desajuste de forma.
-11. **`TrajectoryPredictionModel` tiene un bug de forma**: las capas intermedias están
+12. **`TrajectoryPredictionModel` tiene un bug de forma**: las capas intermedias están
     fijas en 512 pero la última usa `hidden_dim` (default 256). Solo funciona con
     `hidden_dim=512`. Está huérfano, así que no muerde.
-12. **`RangeViewTrajectoryDataset` sigue exigiendo `bin_files`** aunque su
+13. **`RangeViewTrajectoryDataset` sigue exigiendo `bin_files`** aunque su
     `__getitem__` lea `range_files` — hereda `load_data_list` sin sobrescribirlo.
-13. **`eval_windows` y `max_windows` solo deben usarse donde corresponde**
+14. **`eval_windows` y `max_windows` solo deben usarse donde corresponde**
     (`eval_windows` en evaluación, `max_windows` en pre-entrenamiento). Ningún assert
     lo impide.
 
@@ -327,9 +329,41 @@ encuentra los scripts que los escriben. Consecuencias concretas:
   `train_decoder_mini.py:518` (`sum(x)/len(x)`, peso igual por escena) y pertenece al
   track congelado, no al vigente.
 
-**Lo que falta:** un `agregar_resultados.py` que lea los CSV, aplique una convención
-declarada y emita las tablas con su `t`, su `n` y su cuenta de semillas. Mientras no
-exista, cada tabla del proyecto es irreproducible.
+**RESUELTO (30/08):** `agregar_resultados.py` lee los CSV, imprime la convención
+antes de cada tabla y hace los tests pareados por (fold, semilla).
+
+```
+python agregar_resultados.py work_dirs/jm/jm_results.csv              # ponderada (defendible)
+python agregar_resultados.py work_dirs/geo/geo_results.csv --peso escena   # reproduce la reunión
+python agregar_resultados.py work_dirs/f1cv/f1cv_results.csv --por-fold
+```
+
+`--peso objetos` (default) pondera por número de objetos; `--peso escena` da la media
+simple que se usó hasta ahora. También `--poblacion moviles`, `--metrica fde`,
+`--comparar A:B`. El cálculo de `p` es una beta incompleta propia — validada contra
+scipy a 1e-15 — para que corra en `sapiens_gpu`, que no tiene scipy.
+
+### Y lo que el agregador encontró al primer uso: TODO ES UN SOLO FOLD
+
+El aviso automático de "un solo fold" saltó en **todos** los CSV del track vigente:
+
+| CSV | folds presentes |
+|---|---|
+| `f1cv_results.csv` | **solo 0** |
+| `noclip_results.csv` | **solo 0** |
+| `geo_results.csv` | **solo 0** |
+| `jm_results.csv` | **solo 0** |
+| `rvcv_results.csv`, `rvaug_results.csv` | **solo 0** |
+
+Existe únicamente `work_dirs/f1cv/mae_encoder_fold0.pth`; las 48 corridas de `f1cv`
+son todas del fold 0. **La CV de 5 folds de Fase 1 nunca se corrió.** Los experimentos
+15 a 18 — incluido el resultado más firme del proyecto, la capacidad a −10% con 8/8
+semillas — descansan sobre **un solo split de escenas**.
+
+Es exactamente el patrón que ya se llevó puestos dos resultados (18/07 y 06/08): un
+efecto contundente dentro de un fold que se evapora al promediar los cinco, porque la
+varianza entre folds es ~3x la de semillas. Completarlo cuesta 4 encoders de ~12,5 h.
+Ver `docs/EXPERIMENTOS_DECODER.md`, experimento 11.
 
 **Segundo hueco relacionado:** ningún script exporta predicciones de los checkpoints
 vigentes. El `predictions_global.txt` del repositorio es del **18 de agosto** y viene
