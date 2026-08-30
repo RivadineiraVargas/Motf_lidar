@@ -13,19 +13,19 @@ por cierto sin medirlo.
 
 | # | hallazgo | verificado | estado |
 |---|---|---|---|
-| 6 | **la escena está desalineada en el tiempo** | **43% de los objetos** | ABIERTO — el más grave |
-| 2 | el pos-embed del decoder MAE queda en ceros | `requires_grad=False` | ABIERTO |
-| 7 | el sincos 2D está transpuesto respecto de los tokens | numéricamente | ABIERTO |
-| 3 | el mejor checkpoint se elige sobre el propio test | `if un[0] < best_ade` | ABIERTO (track congelado) |
-| 5 | `max_jump` solo cubre la primera ventana | `globals_[:sequence_len]` | ABIERTO |
-| 8 | `_geo` nunca se limpia entre lotes | leído | ABIERTO |
-| 11 | reanudar duplica filas del CSV | reproducido | mitigado al leer; escritura ABIERTA |
-| 9 | tres evaluadores viejos miden contra el objetivo recortado | 0 menciones de `clip_norm` | los tres son OBSOLETOS |
-| 13 | `sequence_len` se acepta y no se usa | leído | ABIERTO (menor) |
-| 1 | la etiqueta de arquitectura se ignoraba | CSV con valores distintos | **ARREGLADO** |
-| 4 | el cache de features no distinguía encoders | `{scene}.pt` | **ARREGLADO** |
-| 10 | `strict=False` sin verificar que algo cargara | leído | **ARREGLADO** en `train_decoder_mini` |
-| 12 | efecto nulo reportado como `t=inf, p=0.0000` | reproducido | **ARREGLADO** |
+| 6 | **la escena estaba desalineada en el tiempo** | 43% de los objetos | **ARREGLADO** — 0 desalineados |
+| 2 | el pos-embed del decoder MAE quedaba en ceros | `requires_grad=False` | **ARREGLADO** — aprendible |
+| 7 | el sincos 2D estaba transpuesto | numéricamente | **ARREGLADO** en la función |
+| 5 | `max_jump` solo cubría la primera ventana | `globals_[:sequence_len]` | **ARREGLADO** — por ventana |
+| 8 | `_geo` nunca se limpiaba entre lotes | leído | **ARREGLADO** |
+| 11 | reanudar duplicaba filas del CSV | reproducido | **ARREGLADO** en los 6 scripts |
+| 10 | `strict=False` sin verificar la carga | leído | **ARREGLADO** en ambos |
+| 13 | `sequence_len` aceptado y sin usar | leído | **ARREGLADO** — vuelve el guard |
+| 1 | la etiqueta de arquitectura se ignoraba | CSV con valores distintos | **ARREGLADO** (no afectó nada) |
+| 4 | el cache no distinguía encoders | `{scene}.pt` | **ARREGLADO** |
+| 12 | efecto nulo como `t=inf, p=0.0000` | reproducido | **ARREGLADO** |
+| 3 | el mejor checkpoint se elige sobre el test | `if un[0] < best_ade` | mitigado — se registra también la época final |
+| 9 | tres evaluadores miden con el objetivo recortado | 0 menciones de `clip_norm` | marcados OBSOLETO en su docstring |
 
 ---
 
@@ -146,3 +146,32 @@ posible.
 3. Recalcular `max_jump` por ventana (5).
 4. Limpiar `_geo` al inicio de cada `forward` (8).
 5. Mover la evaluación dentro del guard de reanudación en los `run_*.sh` (11).
+
+
+---
+
+## Lo que cambió al arreglar el hallazgo 6 (medido)
+
+Alinear la escena cambia el tamaño de los conjuntos, y hay que decirlo antes de
+comparar cualquier número nuevo con uno viejo:
+
+| conjunto | antes | ahora |
+|---|---|---|
+| entrenamiento (ventana 1) | 200 | **252** |
+| validación (ventana 1) | 51 | **32** |
+| validación (7 ventanas) | 319 | **198** |
+
+El de entrenamiento **crece**: antes, un objeto cuya primera ventana estaba
+corrupta o desalineada se descartaba entero; ahora se busca una ventana válida más
+adelante en su track.
+
+El de validación **se achica**: los objetos que aparecen después del frame 6 no
+tienen ninguna ventana con escena alineada, porque su historia se saldría de los
+11 sweeps de LiDAR. Son objetos que nunca se pudieron evaluar bien.
+
+**Ningún número anterior al 30/08 es comparable con los nuevos.** Cambió el
+alineamiento, cambió el conjunto de test y cambió el pre-entrenamiento (el
+pos-embed pasó de ceros a aprendible, así que hay que reentrenar los encoders).
+
+Prueba de humo tras los arreglos: `noclip_dec_fold0`, 2 épocas, pérdida
+0,2949 -> 0,2441, 0,48 s/paso, 1435 MiB. Entrena sano.

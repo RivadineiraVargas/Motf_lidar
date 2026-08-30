@@ -21,15 +21,25 @@
 # ADE pero colapsaba la precision de validez). Mirar tambien la columna acc.
 cd /home/lcad/lidar_sweep_viewer/sapiens/pretrain
 source /home/lcad/miniconda3/etc/profile.d/conda.sh; conda activate sapiens_gpu
+
+# Evalúa solo si esa combinación no está YA en el CSV. Antes la evaluación estaba
+# fuera del guard de reanudación y `eval_fase1_seeds.py` appendea sin comprobar:
+# relanzar una corrida cortada —lo que estos scripts dicen soportar— duplicaba
+# filas, y una sola fila duplicada mueve la media ponderada ~19%. Condicionarlo a
+# NUEVO=1 no alcanzaba: si el corte cae entre entrenar y evaluar, el checkpoint
+# existe y la fila nunca se escribiría. La fuente de verdad es el CSV.
+ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla
+    [ -f "$1" ] && grep -q "^$2,$3,$4," "$1"
+}
 D=configs/sapiens_mae/lidar; VAL="7e2f727866c69ea0 82f90331a1dfe968"
 mkdir -p work_dirs/jm
 for S in 0 1 2 3 4 5 6 7; do
   for NB in 0 2 4; do
     V=ft$NB; WD=work_dirs/jm/${V}_f0s${S}
-    [ -f "$WD/epoch_100.pth" ] || python -u tools/train.py $D/geo_dec_fold0.py --work-dir $WD \
+    NUEVO=0; [ -f "$WD/epoch_100.pth" ] || { NUEVO=1; } ; [ $NUEVO -eq 1 ] && python -u tools/train.py $D/geo_dec_fold0.py --work-dir $WD \
         --cfg-options randomness.seed=$S model.gate_init=0.5 model.finetune_blocks=$NB \
         > $WD.log 2>&1 || { echo "!!! fallo $V s$S"; continue; }
-    python -u eval_fase1_seeds.py --cfg $D/geo_dec_fold0.py --ckpt $WD/epoch_100.pth \
+    ya_evaluado work_dirs/jm/jm_results.csv 0 $V $S || python -u eval_fase1_seeds.py --cfg $D/geo_dec_fold0.py --ckpt $WD/epoch_100.pth \
         --variant $V --seed $S --fold 0 --val-scenes $VAL --eval-windows 7 --sin-clip \
         --out work_dirs/jm/jm_results.csv 2>&1 | grep "^\[eval\]"
   done

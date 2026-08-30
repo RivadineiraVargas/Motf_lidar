@@ -46,7 +46,22 @@ def main():
 
     model = MODELS.build(cfg.model)
     sd = torch.load(args.ckpt, map_location='cpu')
-    model.load_state_dict(sd.get('state_dict', sd), strict=False)
+    pesos = sd.get('state_dict', sd)
+    faltan = model.load_state_dict(pesos, strict=False)
+    # ARREGLO 30/08 (hallazgo 10). strict=False acepta en silencio un checkpoint
+    # que no case en NADA —prefijos cambiados, arquitectura distinta— y deja el
+    # modelo con pesos aleatorios produciendo un ADE plausible. Es exactamente el
+    # fallo de c6c9e05, donde dos experimentos corrieron sin encoder y se detectó
+    # por casualidad. Acá se exige que algo se haya cargado de verdad.
+    cargadas = len(pesos) - len(getattr(faltan, 'unexpected_keys', []))
+    if cargadas <= 0:
+        raise RuntimeError(
+            f'{args.ckpt}: ninguna clave del checkpoint coincidió con el modelo de '
+            f'{args.cfg}. Evaluar así mide un modelo ALEATORIO.')
+    esperadas = len(model.state_dict())
+    if cargadas < 0.5 * esperadas:
+        print(f'[eval] AVISO: solo {cargadas}/{esperadas} tensores cargados del '
+              f'checkpoint — revisar que config y checkpoint correspondan.')
     model = model.to(dev)
     model.eval()
     # H5 de la auditoría: el valor del gate se publicaba desde logs no versionados.

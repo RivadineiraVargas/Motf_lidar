@@ -269,7 +269,12 @@ Dependencias en `requirements.txt`: `tensorflow[and_cuda]`,
 
 ## Trampas
 
-Ordenadas por lo que cuesta descubrirlas de nuevo.
+Ordenadas por lo que cuesta descubrirlas de nuevo. La revisión del 30/08 encontró
+13 errores más, verificados uno por uno y arreglados — ver
+[REVISION_CODIGO_2026-08-30.md](REVISION_CODIGO_2026-08-30.md). El más grave: la
+escena LiDAR estaba desalineada en el tiempo respecto de la trayectoria en el 43%
+de los objetos. **Ningún resultado anterior al 30/08 es comparable con los
+posteriores.**
 
 1. **Los resultados de los experimentos 15-18 son de UN SOLO FOLD** (el 0). La CV de
    5 folds se está completando desde el 30/08 con `run_noclip_cv.sh`; hasta que

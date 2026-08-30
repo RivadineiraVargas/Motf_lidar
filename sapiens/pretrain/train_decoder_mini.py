@@ -550,6 +550,17 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
                     uns.append(metrics(*model(mu, (su['feat'] / SCALE).to(dev),
                                               su['n']), su, dev))
                 un = [sum(x) / len(x) for x in zip(*uns)]
+            # SESGO CONOCIDO (hallazgo 3, auditoría H1). `un[0]` es el ADE de
+            # las escenas RETENIDAS, y es a la vez el criterio de selección y el
+            # número que se publica: todo ADE de este track es un mínimo sobre
+            # épocas de la métrica de test, sesgado hacia abajo y de forma DESIGUAL
+            # entre arquitecturas (la más ruidosa gana más con el mínimo).
+            # Fase 1 lo resolvió evaluando en época FIJA 100. Acá el track está
+            # congelado, así que se conserva el comportamiento pero se registra
+            # además la métrica de la ÚLTIMA época, que no está seleccionada sobre
+            # el test y es la comparable.
+            final_metrics = dict(ade8=un[0], ade5=un[1], fde=un[2], acc=un[3],
+                                 train_ade8=tr[0], gate=gate_of(), ep=ep)
             marca = ''
             if un[0] < best_ade:
                 best_ade, best_ep, best_metrics = un[0], ep, dict(
@@ -611,6 +622,10 @@ def train_decoder(scenes, unseen, epochs=500, lr=1e-3, arch='wayformer', hist=1,
             plt.close(fig)
         if verbose:
             print(f'[OK] modelo y BEV guardados en {out_dir}/')
+
+    best_metrics['final_ade8'] = final_metrics['ade8']
+
+    best_metrics['final_ep'] = final_metrics['ep']
 
     return best_metrics, best_ep
 

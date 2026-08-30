@@ -152,7 +152,18 @@ def build_2d_sincos_position_embedding(
     h, w = patches_resolution
     grid_w = torch.arange(w, dtype=torch.float32)
     grid_h = torch.arange(h, dtype=torch.float32)
-    grid_w, grid_h = torch_meshgrid(grid_w, grid_h)
+    # ARREGLO 30/08 (hallazgo 7 de la revisión). `torch_meshgrid` usa indexado
+    # 'ij', así que meshgrid(grid_w, grid_h) construye una grilla (w, h): al
+    # aplanarla, la fila k codifica (w=k//h, h=k%h) — orden COLUMNA-MAYOR.
+    # Pero `patchify` emite los tokens en orden FILA-MAYOR: token k = (h=k//w,
+    # w=k%w). O sea que cada token recibía el código posicional de otro parche.
+    # En grillas cuadradas es una transposición (biyectiva, pero espejada); en la
+    # grilla real de range-view (4x32) el emparejamiento se rompe del todo y se
+    # pierde la noción de vecindad 2D que el sincos aporta.
+    # Verificado numéricamente: con h=4, w=32 el token 1 debía recibir (w=1, h=0)
+    # y recibía (w=0, h=1). Invirtiendo el orden de los argumentos la grilla queda
+    # (h, w) y al aplanar coincide con el orden de los tokens.
+    grid_h, grid_w = torch_meshgrid(grid_h, grid_w)
     assert embed_dims % 4 == 0, \
         'Embed dimension must be divisible by 4.'
     pos_dim = embed_dims // 4

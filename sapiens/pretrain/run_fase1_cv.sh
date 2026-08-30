@@ -31,6 +31,16 @@
 cd /home/lcad/lidar_sweep_viewer/sapiens/pretrain
 source /home/lcad/miniconda3/etc/profile.d/conda.sh
 conda activate sapiens_gpu
+
+# Evalúa solo si esa combinación no está YA en el CSV. Antes la evaluación estaba
+# fuera del guard de reanudación y `eval_fase1_seeds.py` appendea sin comprobar:
+# relanzar una corrida cortada —lo que estos scripts dicen soportar— duplicaba
+# filas, y una sola fila duplicada mueve la media ponderada ~19%. Condicionarlo a
+# NUEVO=1 no alcanzaba: si el corte cae entre entrenar y evaluar, el checkpoint
+# existe y la fila nunca se escribiría. La fuente de verdad es el CSV.
+ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla
+    [ -f "$1" ] && grep -q "^$2,$3,$4," "$1"
+}
 D=configs/sapiens_mae/lidar
 CSV=work_dirs/f1cv/f1cv_results.csv
 mkdir -p work_dirs/f1cv
@@ -59,12 +69,14 @@ print(' '.join(v.strip().strip(\"'\") for v in re.search(r'val RETENIDA del fold
               gated)    CFG=$D/f1cv_dec_fold${F}.py;  OPT="model.gate_init=0.5" ;;
             esac
             WD=work_dirs/f1cv/${V}_f${F}s${S}
+            NUEVO=0
             if [ ! -f "$WD/epoch_100.pth" ]; then
+                NUEVO=1
                 python -u tools/train.py $CFG --work-dir $WD \
                     --cfg-options randomness.seed=$S $OPT > $WD.log 2>&1 \
                     || { echo "!!! falló $V fold $F seed $S"; continue; }
             fi
-            python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth \
+            ya_evaluado $CSV $F $V $S || python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth \
                 --variant $V --seed $S --fold $F --val-scenes $VAL --out $CSV \
                 2>&1 | grep "^\[eval\]"
         done

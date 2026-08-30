@@ -22,6 +22,11 @@ class LidarSequenceDataset(BaseDataset):
                  mask_ratio=0.75,
                  scenes=None,
                  **kwargs):
+        # `sequence_len` se acepta por compatibilidad con las configs viejas,
+        # pero el ventaneo real lo define history_len (ver load_data_list).
+        # Antes existía un guard `len(bin_files) >= sequence_len` que se
+        # perdió al agregar max_windows; se restaura como filtro mínimo para
+        # que una config que declara 35 no construya ventanas desde 6 sweeps.
         self.sequence_len = sequence_len
         self.history_len = history_len
         self.max_windows = max_windows
@@ -70,6 +75,8 @@ class LidarSequenceDataset(BaseDataset):
             # Antes esto devolvía 1 ítem por escena: con 8 escenas de train, el
             # MAE se pre-entrenaba con 8 muestras (verificado el 26/08). Con 11
             # barridos y history_len=5 entran ~7 ventanas por escena.
+            if len(bin_files) < self.sequence_len:
+                continue
             n_win = len(bin_files) - self.history_len + 1
             for t0 in range(max(0, min(n_win, self.max_windows))):
                 data_list.append({

@@ -134,39 +134,58 @@ class TrajectoryDataset(BaseDataset):
                     )
 
             n_dropped = 0
+            n_desalineados = 0
             for obj_id, track in object_tracks.items():
                 track.sort(key=lambda x: x[0])
+                frames    = [f for f, _, _ in track]
                 centers   = [c for _, c, _ in track]
                 globals_  = [g for _, _, g in track]
                 if len(centers) < self.sequence_len:
                     continue
 
-                # Filtro de consistência: salto global implausível => track corrompido
-                seq_g = globals_[:self.sequence_len]
-                jumps = [np.linalg.norm(seq_g[k + 1] - seq_g[k])
-                         for k in range(self.sequence_len - 1)]
-                if max(jumps) > self.max_jump:
-                    n_dropped += 1
-                    continue
-
-                # eval_windows: cuántas ventanas temporales por objeto. 1 (default)
-                # reproduce el comportamiento histórico —una sola ventana desde el
-                # frame 0—, que es con el que se entrenaron todos los checkpoints.
-                # >1 se usa SOLO en evaluación: multiplica el conjunto de test sin
-                # reentrenar. El tope real lo pone el LiDAR (11 sweeps): la ventana
-                # necesita history_len frames de escena, así que t_start llega
-                # hasta n_lidar - history_len.
+                # ARREGLO 30/08 (hallazgo 6). `centers` se indexa por POSICIÓN EN
+                # EL TRACK: solo contiene los frames donde ESTE objeto fue
+                # etiquetado. Antes ese mismo índice se usaba como número de frame
+                # ABSOLUTO para cargar los .bin de la escena, así que un objeto que
+                # aparecía recién en el frame 6 recibía la escena de los bins 0..4.
+                # Medido sobre las escenas de validación del fold 0: el 43% de los
+                # objetos veía la escena de OTRO momento, con desfases de hasta 6
+                # frames sobre 11 disponibles.
+                # Ahora cada ventana lleva `frame0`, el frame absoluto real donde
+                # empieza, y __getitem__ carga la escena desde ahí.
                 n_lidar = getattr(self, 'n_lidar_frames', 11)
-                max_start = max(0, min(self.eval_windows - 1,
-                                       n_lidar - self.history_len,
-                                       len(centers) - self.sequence_len))
-                for t_start in range(max_start + 1):
+                ventanas = 0
+                for k in range(len(centers) - self.sequence_len + 1):
+                    if ventanas >= self.eval_windows:
+                        break
+                    f0 = frames[k]
+                    # La escena necesita history_len sweeps consecutivos desde f0.
+                    if f0 + self.history_len > n_lidar:
+                        break                      # ya no entra ninguna ventana más
+                    # El tramo con LiDAR debe ser contiguo en frames absolutos: si
+                    # el track tiene huecos, la "historia" abarcaría más tiempo del
+                    # que dice y no alinearía con los sweeps.
+                    tramo = frames[k:k + self.history_len]
+                    if tramo != list(range(f0, f0 + self.history_len)):
+                        n_desalineados += 1
+                        continue
+                    # Filtro de consistencia POR VENTANA (antes solo miraba la
+                    # primera): un track que se corrompe más adelante pasaba el
+                    # filtro y sus frames rotos entraban en las ventanas extra.
+                    seq_g = globals_[k:k + self.sequence_len]
+                    jumps = [np.linalg.norm(seq_g[j + 1] - seq_g[j])
+                             for j in range(len(seq_g) - 1)]
+                    if jumps and max(jumps) > self.max_jump:
+                        n_dropped += 1
+                        continue
                     data_list.append({
                         'scene_name': scene,
                         'object_id':  obj_id,
-                        't_start':    t_start,
-                        'centers':    centers[t_start:t_start + self.sequence_len],
+                        't_start':    k,            # índice dentro del track
+                        'frame0':     f0,           # frame ABSOLUTO de la escena
+                        'centers':    centers[k:k + self.sequence_len],
                     })
+                    ventanas += 1
 
             if n_dropped:
                 print(f'[TrajectoryDataset] cena {scene}: {n_dropped} tracks '
@@ -251,8 +270,10 @@ class TrajectoryDataset(BaseDataset):
         # Tokens de cena (cargar antes de augmentación para rotar consistentemente)
         scene_bin = os.path.join(self.data_root, 'bin_files', scene)
         voxel_sequences = []
-        # t_start alinea la escena con la ventana de trayectoria (ver eval_windows)
-        t0 = item.get('t_start', 0)
+        # frame0 es el frame ABSOLUTO donde arranca la ventana: es lo que alinea
+        # la escena con la trayectoria del objeto (ver hallazgo 6 en load_data_list).
+        # El fallback a t_start solo existe para items viejos serializados.
+        t0 = item.get('frame0', item.get('t_start', 0))
         for i in range(t0, t0 + self.history_len):
             points = self.load_bin(os.path.join(scene_bin, f"{i}.bin"))
             grid   = self.point_cloud_to_voxel_grid(points)

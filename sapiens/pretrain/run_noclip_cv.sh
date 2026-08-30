@@ -18,7 +18,7 @@
 # --eval-windows 7, o sea con el objetivo recortado y 51 muestras: el protocolo
 # viejo del experimento 15. Sus numeros no son comparables con los 16-18. Este
 # script corre el protocolo vigente (clip_norm=None, norm_scale=10.0, evaluacion
-# sin recorte con 7 ventanas = 319 muestras) en los folds que faltan.
+# sin recorte con 7 ventanas (198 muestras tras el arreglo de alineación del 30/08)) en los folds que faltan.
 #
 # ANTIFUGA. El MAE se re-pre-entrena desde cero en las 8 escenas de train de CADA
 # fold; el decoder de cada fold carga el encoder de SU fold. Verificado antes de
@@ -43,6 +43,16 @@
 cd /home/lcad/lidar_sweep_viewer/sapiens/pretrain
 source /home/lcad/miniconda3/etc/profile.d/conda.sh
 conda activate sapiens_gpu
+
+# Evalúa solo si esa combinación no está YA en el CSV. Antes la evaluación estaba
+# fuera del guard de reanudación y `eval_fase1_seeds.py` appendea sin comprobar:
+# relanzar una corrida cortada —lo que estos scripts dicen soportar— duplicaba
+# filas, y una sola fila duplicada mueve la media ponderada ~19%. Condicionarlo a
+# NUEVO=1 no alcanzaba: si el corte cae entre entrenar y evaluar, el checkpoint
+# existe y la fila nunca se escribiría. La fuente de verdad es el CSV.
+ya_evaluado() {   # $1=csv  $2=fold  $3=variante  $4=semilla
+    [ -f "$1" ] && grep -q "^$2,$3,$4," "$1"
+}
 D=configs/sapiens_mae/lidar
 CSV=work_dirs/noclipcv/noclipcv_results.csv
 mkdir -p work_dirs/noclipcv
@@ -80,12 +90,14 @@ print(' '.join(re.findall(r\"'([0-9a-f]{16})'\", m.group(1))))")
               gated)    CFG=$D/noclip_dec_fold${F}.py;  OPT="model.gate_init=0.5" ;;
             esac
             WD=work_dirs/noclipcv/${V}_f${F}s${S}
+            NUEVO=0
             if [ ! -f "$WD/epoch_100.pth" ]; then
+                NUEVO=1
                 python -u tools/train.py $CFG --work-dir $WD \
                     --cfg-options randomness.seed=$S $OPT > $WD.log 2>&1 \
                     || { echo "!!! fallo $V fold $F semilla $S"; continue; }
             fi
-            python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth \
+            ya_evaluado $CSV $F $V $S || python -u eval_fase1_seeds.py --cfg $CFG --ckpt $WD/epoch_100.pth \
                 --variant $V --seed $S --fold $F --val-scenes $VAL \
                 --eval-windows 7 --sin-clip --out $CSV 2>&1 | grep "^\[eval\]"
         done

@@ -195,7 +195,7 @@ class RangeViewTrajectoryDataset(TrajectoryDataset):
         # --- cena: range-view em tokens (rodada por az_shift, consistente) ---
         range_dir = os.path.join(self.data_root, 'range_files', scene)
         tokens = load_range_stack(range_dir, self.history_len, az_shift=az_shift,
-                                  t0=item.get('t_start', 0))
+                                  t0 = item.get('frame0', item.get('t_start', 0)))
 
         return {
             'inputs': torch.from_numpy(tokens).float(),

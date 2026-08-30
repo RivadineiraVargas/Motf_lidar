@@ -120,11 +120,25 @@ class MAEPretrainDecoder(BaseModule):
         if decoder_pos_embed.shape == self.decoder_pos_embed.shape:
             self.decoder_pos_embed.data.copy_(decoder_pos_embed.float())
         else:
+            # ARREGLO 30/08 (hallazgo 2 de la revisión). El Parameter se declara
+            # arriba con requires_grad=False, que es lo correcto CUANDO se llena
+            # con sincos fijo. Al caer acá no se llenaba con nada: se quedaba en
+            # torch.zeros y NO era aprendible, pese a que este mismo log decía que
+            # sí. Todo token enmascarado entraba al decoder como `mask_token + 0`,
+            # indistinguible de cualquier otro, así que el decoder no podía saber
+            # qué vóxel estaba reconstruyendo. Es la misma familia del bug
+            # decoder_pos_embed documentado del MAE del colega.
+            # Ahora se vuelve aprendible de verdad, con la inicialización estándar
+            # de MAE para embeddings de posición aprendidos (normal truncada 0.02).
+            self.decoder_pos_embed.requires_grad_(True)
+            torch.nn.init.trunc_normal_(self.decoder_pos_embed, std=.02)
             from mmengine.logging import MMLogger
             MMLogger.get_current_instance().info(
                 f'[mae_neck] pos-embed 2D {tuple(decoder_pos_embed.shape)} no '
                 f'coincide con {tuple(self.decoder_pos_embed.shape)} (grilla no '
-                f'cuadrada, p.ej. vóxeles 4D): se deja aprendible.')
+                f'cuadrada, p.ej. vóxeles 4D): APRENDIBLE, init trunc_normal(.02). '
+                f'OJO: los encoders anteriores al 30/08 se entrenaron con este '
+                f'tensor en ceros y NO son comparables.')
 
         torch.nn.init.normal_(self.mask_token, std=.02)
 

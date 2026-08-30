@@ -1,3 +1,15 @@
+"""OBSOLETO — NO USAR SUS NÚMEROS.
+
+Este script construye TrajectoryDataset sin `clip_norm=None`, así que mide contra
+el objetivo RECORTADO a ±5 desvíos del histórico (~±2,5 m). Eso trunca el 32% de
+los valores del futuro, cuando los objetos se desplazan ~8,8 m en 3 s: los ADE/FDE
+que imprime son ~10x optimistas y no son comparables con nada del track vigente.
+En la calibración de incerteza el efecto es peor todavía, porque el recorte come
+justamente la cola que las coberturas de ±1σ/±2σ miden.
+
+Reemplazado por `eval_fase1_seeds.py --sin-clip`. Se conserva solo como registro
+histórico (hallazgo 9 de la revisión del 30/08).
+"""
 """
 eval_uncertainty.py — Evalúa la calidad de la incerteza del modelo (Prioridad 3).
 

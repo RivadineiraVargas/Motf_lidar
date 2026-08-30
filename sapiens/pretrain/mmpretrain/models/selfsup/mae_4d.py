@@ -8,6 +8,12 @@ class MAE4D(MAE):
     """MAE adaptado para tokens LiDAR 4D."""
 
     def forward(self, inputs, data_samples=None, mode='tensor', geo=None, **kwargs):
+        # ARREGLO 30/08 (hallazgo 8). `_geo` es estado de instancia que se
+        # guardaba solo cuando venía `geo`, pero nunca se limpiaba: un lote
+        # sin geo reusaba en silencio los centroides del lote anterior. Si los
+        # tamaños coincidían entrenaba contra objetivos equivocados sin error;
+        # si no, reventaba en el l1_loss. Se limpia siempre al entrar.
+        self._geo = None
         # 'geo' son los centroides por vóxel del modo GeoMAE. Viajan como una
         # clave más del dict del dataset; se guardan acá para que loss() los
         # tome, porque MAE.loss() de la clase base solo pasa (pred, inputs, mask).
