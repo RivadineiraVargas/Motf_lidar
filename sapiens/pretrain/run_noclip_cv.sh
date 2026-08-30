@@ -18,7 +18,13 @@
 # --eval-windows 7, o sea con el objetivo recortado y 51 muestras: el protocolo
 # viejo del experimento 15. Sus numeros no son comparables con los 16-18. Este
 # script corre el protocolo vigente (clip_norm=None, norm_scale=10.0, evaluacion
-# sin recorte con 7 ventanas = 183 muestras tras los arreglos del 30/08) en los folds que faltan.
+# sin recorte con 7 ventanas = 183 muestras tras los arreglos del 30/08).
+#
+# LOS CINCO FOLDS, INCLUIDO EL 0. Los resultados viejos del fold 0 son del
+# codigo anterior a los arreglos del 30/08: la escena estaba desalineada en el
+# tiempo para el 43% de los objetos, el pos-embed del decoder MAE se quedaba en
+# ceros, y el conjunto de test era otro (319 muestras contra 183). Nada de lo
+# medido antes del 30/08 es comparable con esto.
 #
 # ANTIFUGA. El MAE se re-pre-entrena desde cero en las 8 escenas de train de CADA
 # fold; el decoder de cada fold carga el encoder de SU fold. Verificado antes de
@@ -69,7 +75,7 @@ D=configs/sapiens_mae/lidar
 CSV=work_dirs/noclipcv/noclipcv_results.csv
 mkdir -p work_dirs/noclipcv
 
-for F in 1 2 3 4; do
+for F in 0 1 2 3 4; do
     echo "######## FOLD $F — inicio $(date '+%d/%m %H:%M') ########"
 
     ENC=work_dirs/f1cv/mae_encoder_fold${F}.pth
@@ -119,5 +125,5 @@ print(' '.join(re.findall(r\"'([0-9a-f]{16})'\", m.group(1))))")
 done
 
 echo "=== CV DE 5 FOLDS COMPLETA ==="
-echo "Para agregar (el fold 0 vive en work_dirs/noclip/noclip_results.csv):"
-echo "  python agregar_resultados.py work_dirs/noclip/noclip_results.csv $CSV --por-fold"
+echo "Para agregar los 5 folds:"
+echo "  python agregar_resultados.py $CSV --por-fold"
