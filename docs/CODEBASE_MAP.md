@@ -550,7 +550,37 @@ brecha está en cruzar entre **escenas** (0,117 → 0,191), no entre ventanas
 **El cuello, medido:** el decoder entrena con **236 ventanas** desde 8 escenas y el
 encoder MAE con **8 muestras**. No falta información por muestra; faltan muestras.
 
-### Opción A — más escenas de Waymo (recomendada)
+### La puerta — leer esto ANTES de las opciones
+
+Que el cuello sea de datos **no autoriza a ir a buscarlos**. El protocolo de la
+orientadora es una **escalera con condición**, no un itinerario:
+
+> **10 → 100 → 1000 SWEEPS.** No se sube a 100 sin un buen resultado en 10. No se
+> sube a 1000 sin un buen resultado en 100. **CARMEN no se toca hasta estar
+> trabajando con 1000.**
+
+**La unidad es SWEEPS (frames de LiDAR), no escenas.** Fuente: `pedido_claudine.md`
+Sec. 13, resumida en `docs/CHECKLIST_CLAUDINE.md` (ítems 5, 6, 7, 10) y
+`docs/SESION_ENCODER_VALIDACAO.md:14`. **`NEXT_SESSION.md`,
+`RESULTADOS_ADE_FDE.md`, `INFORME_FASE1.md` y `AVANCES.md` dicen "escenas" y están
+equivocados.** Conversión: 1 escenario de WOMD = 11 sweeps; 1 shard = 492
+escenarios = 5.412 sweeps.
+
+**En qué peldaño estamos, al 02/09/2026:** en el de 10-100 sweeps, con **275 en
+disco**, y su resultado **todavía no es bueno**:
+
+| ítem del checklist | estado | evidencia |
+|---|---|---|
+| 5 — overfit 10 sweeps | ✅ | loss 2,72 → 0,055 |
+| 6 — overfit 100 sweeps | ⚠️ | loss 2,07 → 0,244, pero *"la generalización pica ~ép1000 y luego memoriza"* |
+| 11 — evaluar en no-visto | ⚠️ | sin entrenar 3,52 · 10 sw 3,39 · 100 sw **3,16** — 10× de datos por solo −6,8 % |
+| 7 — 1.000 sweeps | 🔒 | **bloqueado por la puerta**, no por los datos |
+| 10 — ≥50 mil sweeps | 🔒 | **bloqueado por la puerta** |
+
+Los ítems 7 y 10 no están esperando datos: están esperando que 10 y 100 den un
+resultado que valga la pena escalar. El trabajo vigente es **mejorar ahí**.
+
+### Opción A — más escenas de Waymo (cuando la puerta se abra)
 
 Lo que ya está resuelto, verificado el 02/09:
 
@@ -584,7 +614,7 @@ Lo que hay que resolver, y es manual:
 **No determinado:** el tiempo real de extracción por escena. No hay benchmark ni log
 de ese paso en `docs/`; medirlo con una escena antes de lanzar 175.
 
-### Opción B — CARMEN_LCAD para el MAE (segunda fase)
+### Opción B — CARMEN_LCAD para el MAE (bloqueada hasta trabajar con 1000)
 
 `/dados` tiene 5 logs `log_volta_da_ufes_*` con **51.716 scans** de Velodyne HDL-32E
 a 20 Hz, ~43 min de conducción, contra los 275 sweeps de Waymo. Sirven para el MAE
@@ -616,20 +646,39 @@ de esos 32 pegan el piso dentro de los ±10 m** (a 1,832 m de altura, el haz de
 contra los **47.703 medidos en Waymo** — o sea que es más *disperso*, no más denso.
 La ocupación de Waymo hoy es del 35,9 % de los 300 vóxeles.
 
-### El orden que sugiere la evidencia
+### El orden
 
-**A antes que B.** Waymo da etiquetas, no tiene cambio de dominio, y el trabajo es
-descargar y re-correr un script que ya existe. CARMEN pide escribir un conversor,
-no sirve para el decoder, y arrastra tres trampas silenciosas más un cambio de
-sensor.
+**Primero la puerta, y hoy está cerrada.** El trabajo vigente es lograr un buen
+resultado en **10 y 100 sweeps**, que es donde estamos. Ni A ni B se tocan hasta
+entonces: A es para cuando 100 dé bien, B para cuando estemos trabajando con 1000.
 
-**Y hay un test barato que decide B sin comprometerse:** pre-entrenar el MAE con
-CARMEN y medir con `diagnostico_encoder_mae.py` la reconstrucción sobre las escenas
+**Cuando se abra, A antes que B.** Waymo da etiquetas, no cambia de dominio, y el
+trabajo es descargar y re-correr un script que ya existe. CARMEN pide escribir un
+conversor, no sirve para el decoder, y arrastra tres trampas silenciosas más un
+cambio de sensor.
+
+**El test que decidirá B, cuando corresponda:** pre-entrenar el MAE con CARMEN y
+medir con `diagnostico_encoder_mae.py` la reconstrucción sobre las escenas
 **retenidas de Waymo**. Hoy da **0,1913**. Si baja, transfiere.
 
-Queda abierta la explicación que ninguno de estos experimentos toca: que el objetivo
-de pre-entrenamiento (ocupación) sea el equivocado. Es la crítica de GeoMAE, ya
-anotada en `mae_head_4d.py`, y lo que propone JointMotion.
+### Qué significa "mejorar en 10 y 100"
+
+La escalera pide un resultado bueno, no un experimento corrido. Lo que hoy lo hace
+malo, medido:
+
+- **El encoder memoriza y no generaliza bien** (ítem 6): a 100 sweeps la
+  generalización pica cerca de la época 1000 y después empeora. Un régimen de
+  entrenamiento que se detenga en el pico —o que regularice— es trabajo de este
+  peldaño, no del siguiente.
+- **El retorno del escalado es flojo** (ítem 11): 10× de datos dio −6,8 %. Si esa
+  curva no mejora, ir a 1000 compra poco, y es la razón misma por la que la puerta
+  existe.
+- **Sigue abierta la sospecha del objetivo.** Reconstruir ocupación puede ser el
+  objetivo equivocado: es la crítica de GeoMAE, ya anotada en `mae_head_4d.py`, y lo
+  que propone JointMotion. **Esa hipótesis se prueba en 10 y 100 sweeps**, que es
+  donde una corrida cuesta minutos — no hace falta escalar para atacarla, y si es
+  cierta, escalar un objetivo equivocado solo produce una versión más cara del mismo
+  resultado nulo.
 
 ---
 

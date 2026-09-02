@@ -137,7 +137,9 @@ crudo). Para escalar el pre-entrenamiento MAE, una alternativa sería **Argovers
 **Estado actual de los datos:**
 - `waymo_10`: ahora **11 escenas** con LiDAR (10 usables tras filtro), **103 objetos válidos**
 - Etiquetas (bbox/poses) disponibles para 496 escenas; el LiDAR es lo que falta extraer
-- Nomenclatura: waymo_10 / 100 / 1000 = número de **escenas**
+- Nomenclatura: waymo_10 / 100 / 1000 = número de **escenas** — **OJO, ESTO ES FALSO**
+  para el protocolo de Claudine, cuya escala son SWEEPS (frames). Los nombres de
+  directorio quedaron así por historia; la escalera de la tutora se cuenta en sweeps.
 
 ---
 

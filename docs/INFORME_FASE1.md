@@ -15,7 +15,10 @@ de Decisão do CARMEN-LCAD. Seguindo a inspiração do modelo **Sapiens** (Meta)
 uma arquitetura *Transformer encoder-decoder* com pré-treinamento mascarado (MAE) para
 representar cenas 3D espaço-temporais.
 
-Este relatório cobre a **Fase 1** do protocolo de escalonamento **10 → 100 → 1000 cenas**:
+Este relatório cobre a **Fase 1** do protocolo de escalonamento
+**10 → 100 → 1000 SWEEPS** (quadros de LiDAR):
+> **CORREÇÃO 02/09/2026:** esta linha dizia "cenas". A unidade são SWEEPS — ver
+> `docs/CHECKLIST_CLAUDINE.md` (itens 5/6/7/10) e `SESION_ENCODER_VALIDACAO.md:14`.
 resultados com 10 cenas limpas (8 treino / 2 validação).
 
 **Ponto de partida.** Este trabalho parte do repositório `lidar_sweep_viewer` de Gabriel

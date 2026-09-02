@@ -1,6 +1,8 @@
 # Próxima sesión — FASE 1 del protocolo de Claudine (waymo_10)
 
-Protocolo de la tutora: **10 escenas → 100 → 1000**. Esta es la FASE 1 (10 escenas
+Protocolo de la tutora: **10 → 100 → 1000 SWEEPS** (frames de LiDAR).
+> **CORRECCIÓN 02/09/2026:** esta línea decía "10 escenas". La unidad son SWEEPS —
+> ver `docs/CHECKLIST_CLAUDINE.md` ítems 5/6/7/10 y `SESION_ENCODER_VALIDACAO.md:14`. Esta es la FASE 1 (10 escenas
 limpias, 8 train / 2 val). Todo preparado y **validado por smoke test**. Para
 arrancar (de noche, máquina prendida y sin suspender):
 

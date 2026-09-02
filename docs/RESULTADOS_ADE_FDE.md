@@ -73,7 +73,7 @@ Checkpoints:
 
 # FASE 1 — Datos limpios (waymo_clean) + encoder re-pretrenado (2026-06-15)
 
-Protocolo de Claudine (10 → 100 → 1000). FASE 1 = 10 escenas limpias (8 train /
+Protocolo de Claudine (10 → 100 → 1000 **SWEEPS**, no escenas — corregido 02/09/2026). FASE 1 = 10 escenas limpias (8 train /
 2 val), horizonte **3s**, encoder MAE **re-pretrenado en las 8 escenas de train**
 (antes era 1 sola escena vieja). Ver `docs/BUGS_DATOS.md` por qué los datos viejos
 estaban sucios, y `docs/NEXT_SESSION.md` por el pipeline.
