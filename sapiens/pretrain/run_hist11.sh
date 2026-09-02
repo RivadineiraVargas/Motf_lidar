@@ -63,20 +63,32 @@ print(' '.join(re.findall(r\"'([0-9a-f]{16})'\", m.group(1))))")
         [ -f "$WD/epoch_100.pth" ] || python -u tools/train.py $D/hist11_base_fold${F}.py \
             --work-dir $WD --cfg-options randomness.seed=$S > $WD.log 2>&1 \
             || { echo "!!! fallo entrenando base11 fold $F semilla $S"; continue; }
-        ya_evaluado $CSV $F base11 $S $NV || \
+        # OJO con el `| grep "^[eval]"`: se come cualquier traceback, porque los
+        # guards de eval_fase1_seeds.py (RuntimeError del hallazgo 10, SystemExit
+        # de poblacion vacia) no imprimen con ese prefijo. Por eso la salida
+        # COMPLETA va antes a un log y el grep solo filtra lo que se muestra: un
+        # fallo deja rastro en disco en vez de desaparecer.
+        ya_evaluado $CSV $F base11 $S $NV || {
             python -u eval_fase1_seeds.py --cfg $D/hist11_base_fold${F}.py \
                 --ckpt $WD/epoch_100.pth --variant base11 --seed $S --fold $F \
                 --val-scenes $VAL --eval-windows 7 --sin-clip \
-                --poblacion-hist 11 --out $CSV 2>&1 | grep "^\[eval\]"
+                --poblacion-hist 11 --out $CSV > $WD.eval.log 2>&1 \
+                || echo "!!! fallo evaluando base11 fold $F semilla $S — ver $WD.eval.log"
+            grep "^\[eval\]" $WD.eval.log
+        }
 
         # --- brazo de referencia: historia 0,5 s, checkpoint YA entrenado ---
         CK=work_dirs/noclipcv/baseline_f${F}s${S}/epoch_100.pth
         [ -f "$CK" ] || { echo "!!! falta $CK — sin referencia para f$F s$S"; continue; }
-        ya_evaluado $CSV $F base5 $S $NV || \
+        LOG5=work_dirs/hist11/base5_f${F}s${S}.eval.log
+        ya_evaluado $CSV $F base5 $S $NV || {
             python -u eval_fase1_seeds.py --cfg $D/noclip_base_fold${F}.py \
                 --ckpt $CK --variant base5 --seed $S --fold $F \
                 --val-scenes $VAL --eval-windows 7 --sin-clip \
-                --poblacion-hist 11 --out $CSV 2>&1 | grep "^\[eval\]"
+                --poblacion-hist 11 --out $CSV > $LOG5 2>&1 \
+                || echo "!!! fallo evaluando base5 fold $F semilla $S — ver $LOG5"
+            grep "^\[eval\]" $LOG5
+        }
     done
     echo "######## FOLD $F — fin $(date '+%d/%m %H:%M') ########"
 done

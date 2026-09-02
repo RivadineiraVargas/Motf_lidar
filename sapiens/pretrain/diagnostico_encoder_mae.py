@@ -3,7 +3,8 @@
 # LA PREGUNTA. Los cinco encoders de work_dirs/f1cv se pre-entrenaron con
 # `max_windows=1`: UNA ventana por escena, 8 escenas de train = 8 muestras, mil
 # épocas. Y ningún f1cv_mae_fold*.py declara val_dataloader, así que la pérdida
-# 1.29 -> 0.05 de los logs es de ENTRENAMIENTO sobre esas ocho muestras. Nunca se
+# 1.29 -> 0.019-0.087 segun el fold (n=5) de los logs es de ENTRENAMIENTO sobre
+# esas ocho muestras. Nunca se
 # midió la reconstrucción fuera de ellas.
 #
 # Importa porque toda la conclusión "la escena no aporta" depende de que la
@@ -170,11 +171,23 @@ def main():
             modelo = MODELS.build(cfg.model)
             if cargar:
                 ck = torch.load(ckpt_path, map_location='cpu', weights_only=False)
-                faltan, sobran = modelo.load_state_dict(ck['state_dict'], strict=False)
-                if faltan:
-                    print(f'  !! claves faltantes al cargar: {len(faltan)} '
-                          f'(p.ej. {faltan[:3]})')
-                del ck
+                pesos = ck['state_dict']
+                inc = modelo.load_state_dict(pesos, strict=False)
+                # Mismo guard que eval_fase1_seeds.py (ARREGLO 30/08, hallazgo 10):
+                # strict=False acepta en silencio un checkpoint que no case en NADA
+                # y deja el modelo con pesos ALEATORIOS. Acá eso sería peor que un
+                # ADE plausible: mediríamos ruido y lo reportaríamos como "el
+                # encoder entrenado", que es justo la conclusión de este script.
+                cargadas = len(pesos) - len(inc.unexpected_keys)
+                if cargadas <= 0:
+                    raise SystemExit(
+                        f'{ckpt_path} no aportó ni un peso a {cfg_path}. Medir así '
+                        f'compara un modelo ALEATORIO contra otro modelo aleatorio.')
+                esperadas = len(modelo.state_dict())
+                if cargadas < 0.5 * esperadas:
+                    print(f'  !! AVISO: solo {cargadas}/{esperadas} tensores '
+                          f'cargados — revisar que config y checkpoint casen.')
+                del ck, pesos
                 gc.collect()
             modelo.to(dev)
             verificar_modo_train(modelo)

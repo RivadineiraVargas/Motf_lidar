@@ -389,7 +389,8 @@ posteriores.**
     `diagnostico_encoder_mae.py:verificar_modo_train`—. Es también la razón de que
     `_encode_scene` no enmascare al extraer features, que ahí sí es lo correcto.
 21. **Ningún `f1cv_mae_fold*.py` tiene `val_dataloader`.** El MAE se pre-entrena sin
-    ninguna medición fuera de train: la caída 1,29 → 0,05 de los logs no dice nada
+    ninguna medición fuera de train: la caída 1,29 → 0,019-0,087 según el fold
+    (n=5) de los logs no dice nada
     sobre generalización. Lo que sí la mide es `diagnostico_encoder_mae.py`
     (experimento 21): los encoders **sí generalizan** —43,5 % mejor que trivial en
     escenas retenidas, 6× mejor que sin entrenar— y la brecha está en cruzar entre

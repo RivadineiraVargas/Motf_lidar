@@ -27,11 +27,7 @@
 # valores del futuro. Los modelos aprendian que la respuesta nunca pasa
 # de 5: verificado, predicen >5 en solo el 27% de los casos cuando el
 # objetivo real lo supera en el 92%. Subprediccion sistematica.
-# GENERADO por run_fase1_cv.sh — decoder (base) del fold 0.
 # val RETENIDA del fold 0: ['7e2f727866c69ea0', '82f90331a1dfe968']
-# El MAE de este fold se pre-entrena SOLO en sus 8 escenas de train;
-# usarlo en otro fold seria FUGA auto-supervisada.
-# clean10_baseline.py — Baseline (solo histórico), horizonte 3s, waymo_clean 25 escenas
 _base_ = ['../../_base_/default_runtime.py', '_clean10_base.py']
 
 custom_imports = dict(
@@ -93,4 +89,4 @@ default_hooks = dict(
     logger=dict(interval=20),
 )
 
-work_dir = './work_dirs/noclip/noclip_base_fold0'
+work_dir   = './work_dirs/hist11/base11_fold0'

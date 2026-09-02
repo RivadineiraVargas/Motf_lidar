@@ -22,17 +22,12 @@
 # El encoder MAE NO se toca: BaselineTrajectoryModel no lo usa. Para las
 # variantes con escena habria que re-pre-entrenarlo, porque su patch_embed
 # es Linear(history_len, 1024).
-# GENERADO por run_noclip_cv.sh — base del fold 3, protocolo VIGENTE.
 # Igual a f1cv_base_fold3 pero SIN el recorte del objetivo (clip_norm=None) y con
 # escala fija de 10 m, que es lo que usan los experimentos 16-18. Se genera para
 # completar la CV de 5 folds: hasta el 30/08 TODOS los resultados de Fase 1 eran
 # del fold 0 solo, y este proyecto ya vio dos efectos de un fold evaporarse al
 # promediar los cinco (18/07 y 06/08).
-# GENERADO por run_fase1_cv.sh — decoder (base) del fold 3.
 # val RETENIDA del fold 3: ['367b072edc9822ea', '4a2ef30000d19d90']
-# El MAE de este fold se pre-entrena SOLO en sus 8 escenas de train;
-# usarlo en otro fold seria FUGA auto-supervisada.
-# clean10_baseline.py — Baseline (solo histórico), horizonte 3s, waymo_clean 25 escenas
 _base_ = ['../../_base_/default_runtime.py', '_clean10_base.py']
 
 custom_imports = dict(
@@ -94,4 +89,4 @@ default_hooks = dict(
     logger=dict(interval=20),
 )
 
-work_dir = './work_dirs/noclipcv/noclip_base_fold3'
+work_dir   = './work_dirs/hist11/base11_fold3'

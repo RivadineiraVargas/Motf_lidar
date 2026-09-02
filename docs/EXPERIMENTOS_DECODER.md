@@ -1389,7 +1389,8 @@ propia. No sobrevive al control del arranque del gate.
 Los experimentos 19 y 20 concluyen que la escena no aporta. Esa conclusión solo
 vale si la escena que ve el decoder significa algo. Y los cinco encoders se
 pre-entrenaron con **8 muestras** (ver la corrección del 02/09 arriba) durante
-1000 épocas, sin ningún `val_dataloader`: la caída 1,29 → 0,05 de los logs es
+1000 épocas, sin ningún `val_dataloader`: la caída 1,29 → 0,019-0,087 según el
+fold (mínimo de cada uno de los 5 logs) es
 pérdida de **entrenamiento sobre esas ocho ventanas**. Nunca se midió la
 reconstrucción fuera de ellas.
 
