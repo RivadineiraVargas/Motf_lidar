@@ -234,6 +234,7 @@ byte a byte salvo el `work_dir`.
 | `run_jointmotion.sh` | descongelamiento parcial (`finetune_blocks`) |
 | `run_noclip_cv.sh` | **la CV de los 5 folds** (0-4) en el protocolo vigente. Corrida y cerrada el 31/08 |
 | `run_gateinit.sh` | el control del **arranque del gate** (`gate_init=0.05`): 5 folds × 8 semillas, reusa los encoders de la CV |
+| `diagnostico_encoder_mae.py` | **¿el encoder memorizó?** Pérdida de reconstrucción en 3 poblaciones (ventanas vistas / ventanas nuevas de escenas vistas / escenas retenidas) con máscaras pareadas, contra el modelo sin entrenar y contra predecir 0. No entrena |
 | `extract_mae_encoder.py` | renombra `backbone.*`→`encoder.*` entre pre-train y decoder |
 | `viz_un_auto.py` | trayectoria de un objeto, gate0 vs gated |
 | `viz_rect_reconstruction.py` | reconstrucción del MAE, genérico por CLI |
@@ -305,9 +306,11 @@ escena LiDAR estaba desalineada en el tiempo respecto de la trayectoria en el 43
 de los objetos. **Ningún resultado anterior al 30/08 es comparable con los
 posteriores.**
 
-1. **Los resultados de los experimentos 15-18 son de UN SOLO FOLD** (el 0). La CV de
-   5 folds se está completando desde el 30/08 con `run_noclip_cv.sh`; hasta que
-   termine, ningún número de Fase 1 tiene respaldo entre splits.
+1. **Los resultados de los experimentos 15-18 son de UN SOLO FOLD** (el 0), y no
+   tienen respaldo entre splits. La CV de 5 folds cerró el 31/08 con
+   `run_noclip_cv.sh` (experimento 19) y su control del gate el 01/09
+   (experimento 20): **cualquier número de Fase 1 que se cite debe salir de ahí**,
+   no de los experimentos 15-18.
 2. **Agregar los CSV solo con `agregar_resultados.py`**, nunca a mano: la convención
    de promediado cambia el ADE absoluto un 7%.
 3. **`eval_fase1_seeds.py` sigue sin deduplicar al ESCRIBIR** (abre el CSV en modo
@@ -367,6 +370,29 @@ posteriores.**
 18. **`eval_windows` y `max_windows` solo deben usarse donde corresponde**
     (`eval_windows` en evaluación, `max_windows` en pre-entrenamiento). Ningún assert
     lo impide.
+19. **Un arreglo que no llega al config que se corre es indistinguible de no
+    haberlo hecho.** `max_windows` existe desde 99a4239 para que el MAE no vea una
+    sola ventana por escena, pero **su default sigue siendo 1** y solo
+    `geo_mae_fold0.py` lo declara. Los `f1cv_mae_fold*.py` los había generado
+    `run_fase1_cv.sh` antes del arreglo, así que los cinco encoders de la CV —los
+    que sostienen los experimentos 19 y 20— se pre-entrenaron con **8 muestras**.
+    Los docs decían "corregido". Verificación en una línea:
+    `grep -oE "\[1000\]\[ *[0-9]+/[0-9]+\]" work_dirs/f1cv/mae_fold*.log | tail -1`
+    → `[1000][8/8]` son 8 muestras con `batch_size=1`. **Antes de creerle a un
+    "corregido" en un doc, mirar el log de la corrida que se usó.**
+20. **`MAEViT4D` solo enmascara bajo `if self.training`.** En `eval()` devuelve
+    `mask=ceros`, y como la pérdida es `(loss*mask).sum()/(mask.sum()+1e-6)`, sale
+    **0,0000 para cualquier modelo, entrenado o no**: un cero que parece un éxito y
+    es un no-op. Para medir reconstrucción hay que poner el modelo en `train()`
+    —seguro acá porque no hay dropout ni BatchNorm, lo verifica
+    `diagnostico_encoder_mae.py:verificar_modo_train`—. Es también la razón de que
+    `_encode_scene` no enmascare al extraer features, que ahí sí es lo correcto.
+21. **Ningún `f1cv_mae_fold*.py` tiene `val_dataloader`.** El MAE se pre-entrena sin
+    ninguna medición fuera de train: la caída 1,29 → 0,05 de los logs no dice nada
+    sobre generalización. Lo que sí la mide es `diagnostico_encoder_mae.py`
+    (experimento 21): los encoders **sí generalizan** —43,5 % mejor que trivial en
+    escenas retenidas, 6× mejor que sin entrenar— y la brecha está en cruzar entre
+    **escenas** (0,117 → 0,191), no entre ventanas (0,069 → 0,117).
 
 ---
 

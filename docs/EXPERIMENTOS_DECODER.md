@@ -1221,8 +1221,20 @@ range view en `export_decoder_mini_global.py` (método de Gabriel, calibrado con
 
 `LidarSequenceDataset.load_data_list` devolvía **un ítem por escena**: con 8
 escenas de train, el MAE veía 8 muestras repetidas 1000 épocas, para un ViT de
-302 M. Es probablemente la explicación más simple del resultado negativo.
-Corregido con `max_windows` (8 → 56). Ver commit 99a4239.
+302 M. Ver commit 99a4239.
+
+> **CORRECCIÓN 02/09.** Este párrafo decía *"Corregido con `max_windows`
+> (8 → 56)"*. Es falso para los encoders que de verdad se usaron. El arreglo
+> llegó al **dataset** y a **`geo_mae_fold0.py`**, pero `max_windows` sigue en
+> **1 por defecto** y ningún `f1cv_mae_fold*.py` lo declara — esos configs los
+> había generado `run_fase1_cv.sh` antes del arreglo. Los cinco encoders de la
+> CV de 5 folds (`work_dirs/f1cv/mae_encoder_fold*.pth`), o sea los que
+> sostienen los experimentos 19 y 20, se pre-entrenaron con **8 muestras cada
+> uno**. Verificable en una línea: los cinco logs terminan en `[1000][8/8]`.
+>
+> Un arreglo aplicado al código pero no a los configs que se corren es
+> indistinguible de no haberlo aplicado. Lo que sí quedó medido está en el
+> experimento 21, abajo: pese a las 8 muestras, los encoders generalizan.
 
 ### Corrección: el conteo de tokens
 
@@ -1364,3 +1376,85 @@ resultado con p=0,038 pasó a p=0,139 al corregir un detalle de inicialización.
 **Retractación registrada (la décima del proyecto):** el resultado del experimento 19
 —"la escena perjudica, p=0,038"— se retractó en menos de 24 horas, por medición
 propia. No sobrevive al control del arranque del gate.
+
+---
+
+## Experimento 21: ¿los encoders memorizaron? — diagnóstico de generalización del MAE
+
+**Fecha:** 2026-09-02 · **Script:** `sapiens/pretrain/diagnostico_encoder_mae.py`
+**No entrena nada:** lee los cinco `epoch_1000.pth` existentes y hace forwards.
+
+### Por qué
+
+Los experimentos 19 y 20 concluyen que la escena no aporta. Esa conclusión solo
+vale si la escena que ve el decoder significa algo. Y los cinco encoders se
+pre-entrenaron con **8 muestras** (ver la corrección del 02/09 arriba) durante
+1000 épocas, sin ningún `val_dataloader`: la caída 1,29 → 0,05 de los logs es
+pérdida de **entrenamiento sobre esas ocho ventanas**. Nunca se midió la
+reconstrucción fuera de ellas.
+
+Si el encoder hubiera memorizado, en validación entregaría ruido, y que el gate
+cierre a 0,004 dejaría de ser *"el modelo descarta la escena"* para ser *"el
+modelo descarta ruido"*: la condición quedaría **sin probar**, no refutada — el
+mismo error que se corrigió en el experimento 17.
+
+### Diseño
+
+Tres poblaciones que separan las dos hipótesis, por fold:
+
+| población | qué es | n por fold |
+|---|---|---|
+| `train_vistas` | las 8 ventanas exactas que el MAE optimizó | 8 |
+| `train_nuevas` | las otras 6 ventanas/escena de las MISMAS escenas (t0≥1) | 48 |
+| `val` | las 7 ventanas de cada una de las 2 escenas RETENIDAS del fold | 14 |
+
+Y dos referencias sin las cuales los números no significan nada: el **mismo
+modelo sin entrenar** (el "no aprendió nada") y la pérdida **trivial** de
+predecir 0 en todo (con ocupación en {0,1}, la fracción de vóxeles ocupados).
+
+**Máscaras pareadas.** La pérdida MAE depende de qué vóxeles se enmascaren: se
+fija la semilla justo antes de cada forward, así que la máscara nº k es idéntica
+en las tres poblaciones y en los dos modelos. 8 máscaras promediadas por muestra.
+
+**Trampa encontrada al escribir el script.** `MAEViT4D.forward` solo enmascara
+bajo `if self.training`; en `eval()` devuelve `mask=ceros` y la pérdida sale
+`0/1e-6 = 0` para cualquier modelo. La primera corrida dio 0.0000 idéntico en
+entrenado y aleatorio. Hay que medir con el modelo en `train()` — verificando
+antes que no haya dropout activo ni BatchNorm, que es lo que hace
+`verificar_modo_train`.
+
+### Resultado — media sobre los 5 folds
+
+| población | entrenado | aleatorio | trivial | vs trivial |
+|---|---|---|---|---|
+| `train_vistas` | 0,0691 ± 0,0224 | 1,1584 | 0,3408 | **79,7 %** mejor |
+| `train_nuevas` | 0,1170 ± 0,0082 | 1,1632 | 0,3380 | **65,4 %** mejor |
+| `val` | 0,1913 ± 0,0441 | 1,1625 | 0,3384 | **43,5 %** mejor |
+
+`val` peor que `train_nuevas` en **5/5 folds**. Razones: val/train_nuevas =
+1,63× · val/train_vistas = 2,77×.
+
+### Lectura
+
+**Los encoders NO memorizaron.** En escenas que nunca vieron reconstruyen 6×
+mejor que sin entrenar y 43,5 % mejor que la predicción trivial. La hipótesis de
+que el gate se cierra porque le entregan ruido **queda refutada**: el resultado
+negativo de los experimentos 19 y 20 se sostiene.
+
+**Hay sobreajuste, pero es un gradiente y no un derrumbe** (1,63×, consistente en
+5/5 folds).
+
+**Dónde está la brecha, que es lo accionable.** El salto grande no está entre las
+8 ventanas vistas y las 48 nuevas de las mismas escenas (0,069 → 0,117), sino al
+cruzar a **escenas** distintas (0,117 → 0,191). Consecuencia directa:
+
+> Arreglar `max_windows=1` daría poco: añadiría ventanas de escenas que el
+> encoder ya maneja bien. Lo que no generaliza es el cruce entre escenas, y eso
+> solo se arregla con **más escenas**. `waymo_clean` tiene **25 escenas con
+> datos de 492 directorios**: el cuello de botella es la extracción.
+
+**Lo que este experimento NO responde.** Reconstruir ocupación bien no implica
+que las features sirvan para trayectorias — es la crítica de GeoMAE
+(arXiv:2305.08808) ya anotada en `mae_head_4d.py`. Que el encoder generalice
+descarta la explicación *"es ruido"*, no la explicación *"el objetivo de
+pre-entrenamiento es el equivocado"*.
