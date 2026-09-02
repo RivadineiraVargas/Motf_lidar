@@ -1259,3 +1259,108 @@ con máscara de validez, normalización por magnitud y L1 (ideas de
 (0,599 → 0,437 en 5000 pasos, oscilando), contra el modo anterior que caía
 1,946 → 0,221. El objetivo geométrico **no llegó a probarse**. Resultado
 completo en la sección "Experimento 17" más arriba.
+
+---
+
+## Experimento 19: la validación cruzada de 5 folds — el primer resultado defendible
+
+**Fechas:** lanzado 30/08 09:06, terminado 31/08 04:33 (19 h 30).
+**Script:** `run_noclip_cv.sh`. **Datos:** `work_dirs/noclipcv/noclipcv_results.csv`.
+**Diseño:** 5 folds × 3 variantes × 8 semillas = **120 corridas**, 240 filas, cero
+duplicados. Encoder MAE re-pre-entrenado desde cero por fold (antifuga verificada).
+Época fija 100, evaluación `--sin-clip --eval-windows 7`.
+
+**Por qué se corrió.** Al estrenar `agregar_resultados.py` el 30/08, su aviso
+automático de "un solo fold" saltó en TODOS los CSV del proyecto: los experimentos
+15 a 18 descansaban sobre un único split de escenas. La CV de 5 folds nunca se había
+corrido. Además, ese mismo día la revisión de código encontró 33 errores, entre
+ellos que **la escena LiDAR estaba desalineada en el tiempo para el 43% de los
+objetos** — así que ningún número anterior era comparable de todas formas.
+
+**Resultado entre folds (n=5 folds, no corridas):**
+
+| efecto | valor | t | p | folds a favor |
+|---|---|---|---|---|
+| **capacidad** (gate0 − baseline) | −0,207 ± 0,219 | −2,11 | 0,102 | **5/5** |
+| **escena** (gated − gate0) | +0,723 ± 0,529 | +3,05 | **0,038** | 0/5 |
+
+Por fold, el efecto de la escena: +39,9%, +40,6%, +11,1%, +39,0%, +3,5%.
+
+**Este fue el primer efecto del proyecto que NO se evaporó al pasar de un fold a
+cinco.** Pero ver el experimento 20: la mayor parte era un artefacto nuestro.
+
+---
+
+## Experimento 20: el arranque del gate — la mitad del "daño" era diseño experimental
+
+**Fechas:** 31/08, 06:12 → 14:29 (8 h 17). **Script:** `run_gateinit.sh`.
+**Datos:** `work_dirs/gateinit/gateinit_results.csv` (5 folds × 8 semillas).
+
+**El diagnóstico.** Leyendo las curvas de pérdida de entrenamiento del fold 0:
+
+| época | gate0 | gated (init 0,5) | gated005 (init 0,05) |
+|---|---|---|---|
+| 5 | 0,0685 | **0,2552** | 0,0825 |
+| 10 | 0,0618 | **0,2542** | 0,0618 |
+| 100 | 0,0336 | 0,0489 | 0,0361 |
+
+`gated` pasa sus primeras ~10 épocas **paralizado**: la pérdida clavada en el valor
+inicial mientras el control ya bajó un orden de magnitud. Y el efecto acumulado es
+peor que un retraso: la pérdida que `gated` alcanza en la época 100, `gate0` ya la
+tenía en la **época 41**. Con evaluación en época fija, la variante experimental
+competía con **menos de la mitad del entrenamiento efectivo** de su control.
+
+**La causa.** `gate_init=0.5` mete la rama de escena a media amplitud desde el primer
+paso, cuando todavía no aprendió nada: el decoder recibe 15 números útiles (la
+historia) más 64 de ruido, y gasta épocas aprendiendo a callarlos.
+
+**Los tres regímenes del gate:**
+
+| arranque | ¿la rama aprende? | ¿ahoga al decoder? |
+|---|---|---|
+| 0,0 | **no** — el gradiente a la rama va multiplicado por `tanh(g)=0` | no |
+| **0,05** | **sí** | **no** |
+| 0,5 | sí | **sí** — 59 épocas equivalentes |
+
+Con `g=0` el gradiente al **escalar** no es cero, pero es proporcional a una
+proyección que nunca aprende: ruido. El gate hace una caminata al azar alrededor del
+cero — de ahí el `−0,0047` que registró el commit 8692268. `0,05` rompe la simetría
+sin ahogar. Es la receta de LayerScale, y el ángulo teórico está en ReZero
+(Bachlechner 2020, `papers/`), aunque su argumento no transfiere limpio: ReZero SUMA
+a una identidad y nuestra rama CONCATENA.
+
+**Resultado: el efecto de la escena, con el mismo control.**
+
+| variante | efecto entre folds | t | p | folds a favor |
+|---|---|---|---|---|
+| `gated` (init 0,5) | +0,723 ± 0,529 | +3,05 | **0,038** | 0/5 |
+| **`gated005`** (init 0,05) | **+0,276 ± 0,335** | **+1,84** | **0,139** | 0/5 |
+
+Por fold: +22,4%, +13,5%, +1,2%, +10,6%, +0,1% — **baja en los cinco, sin excepción.**
+
+**El gate converge a 0,0042.** Arrancando en 0,05, el modelo lo cierra casi del todo.
+Cuando se le da un arranque justo, **decide por sí mismo que la escena no sirve**.
+
+---
+
+## Estado al 2026-09-01 — la conclusión que se sostiene
+
+**Lo que se puede afirmar:**
+
+1. **La escena LiDAR auto-supervisada NO aporta** a esta escala. Cinco folds, ocho
+   semillas, escena temporalmente alineada, control de arquitectura, y sin el
+   artefacto del gate: **0 de 5 folds a favor**, y el gate aprendido cierra a 0,004.
+2. **No se puede afirmar que perjudique.** Con el arranque corregido, +0,276 con
+   p=0,139. La formulación honesta es *"no aporta, y posiblemente estorba un poco"*.
+3. **La capacidad (atención entre objetos) tampoco alcanza significancia**: −0,207,
+   **5/5 folds en la misma dirección**, pero p=0,102. Dirección consistente, potencia
+   insuficiente con n=5 folds.
+
+**El hallazgo metodológico, que vale por sí solo:** la inicialización del gate
+residual le costaba a la variante experimental **más de la mitad de su
+entrenamiento**, inflando el efecto medido de +0,276 a +0,723 — casi el triple. Un
+resultado con p=0,038 pasó a p=0,139 al corregir un detalle de inicialización.
+
+**Retractación registrada (la décima del proyecto):** el resultado del experimento 19
+—"la escena perjudica, p=0,038"— se retractó en menos de 24 horas, por medición
+propia. No sobrevive al control del arranque del gate.
