@@ -35,6 +35,17 @@ def main():
     ap.add_argument('--fold', type=int, default=-1)
     ap.add_argument('--sin-clip', action='store_true',
                     help='evalúa contra la trayectoria SIN recortar (error real)')
+    ap.add_argument('--poblacion-hist', type=int, default=None,
+                    help='Evalúa sobre la población que soportaría una historia '
+                         'de N frames, prediciendo el MISMO futuro: se queda con '
+                         'las ventanas cuyo futuro arranca en el frame absoluto N '
+                         '(frame0 + history_len == N) y cuyo objeto existe también '
+                         'con history_len=N. Sirve para comparar modelos de '
+                         'distinta historia sin cambiar ni la población ni el '
+                         'objetivo: con N=11, un modelo de h=5 usa su ventana '
+                         'f0=6 y uno de h=11 su ventana f0=0, y los dos predicen '
+                         'los frames 11..40 de los mismos objetos. Sin esto la '
+                         'comparación es entre poblaciones distintas.')
     ap.add_argument('--eval-windows', type=int, default=1,
                     help='ventanas temporales por objeto (B2 de la auditoría). '
                          '1 = comportamiento histórico; 7 = tope que permiten los '
@@ -80,10 +91,36 @@ def main():
         dcfg['clip_norm'] = None
     ds = DATASETS.build(dcfg)
 
+    if args.poblacion_hist is not None:
+        N = args.poblacion_hist
+        # Población de referencia: los objetos que EXISTEN con historia N. Se
+        # midió que el conjunto de h=11 es subconjunto del de h=5 en los 5 folds,
+        # así que tomar el de la historia más larga deja los brazos pareados.
+        ref = dict(dcfg)
+        ref['history_len'] = N
+        ref['sequence_len'] = N + cfg.pred_len
+        permitidos = {(it['scene_name'], it['object_id'])
+                      for it in DATASETS.build(ref).data_list
+                      if it['frame0'] + N == N}
+        h = ds.history_len
+        # OJO: se filtra data_list, NO se usa len(ds). BaseDataset serializa la
+        # lista en __init__ y su __len__ sigue contando los ítems originales;
+        # este dataset, en cambio, lee data_list en __getitem__. Filtrar y luego
+        # iterar con len(ds) leería índices fuera de rango.
+        ds.data_list = [it for it in ds.data_list
+                        if it['frame0'] + h == N
+                        and (it['scene_name'], it['object_id']) in permitidos]
+        print(f'[eval] población alineada a historia {N}: {len(ds.data_list)} '
+              f'ventanas de {len(permitidos)} objetos (history_len={h}, '
+              f'futuro desde el frame {N})')
+        if not ds.data_list:
+            raise SystemExit(f'[eval] población vacía con --poblacion-hist {N} '
+                             f'e history_len={h}: no hay nada que medir.')
+
     is_baseline = 'Baseline' in cfg.model['type']
     per_scene = {}
     pred_len = cfg.pred_len
-    for i in range(len(ds)):
+    for i in range(len(ds.data_list)):
         d = ds[i]
         scene = d['scene_name']
         # misma lógica de desnormalización que evaluate_clean10_newmae.py:

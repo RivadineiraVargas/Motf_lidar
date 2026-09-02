@@ -1458,3 +1458,93 @@ que las features sirvan para trayectorias — es la crítica de GeoMAE
 (arXiv:2305.08808) ya anotada en `mae_head_4d.py`. Que el encoder generalice
 descarta la explicación *"es ruido"*, no la explicación *"el objetivo de
 pre-entrenamiento es el equivocado"*.
+
+---
+
+## Experimento 22: la historia completa (1,1 s) — no mejora la predicción
+
+**Fecha:** 2026-09-02 · **Script:** `sapiens/pretrain/run_hist11.sh`
+**CSV:** `work_dirs/hist11/hist11_results.csv` · 5 folds × 8 semillas × 2 brazos
+
+### Por qué
+
+WOMD-LiDAR entrega 11 frames de LiDAR por escena = 1,1 s, que es exactamente la
+ventana de historia que define el benchmark de Waymo (`docs/ESTUDIO_WAYFORMER.md`).
+Todos los configs de Fase 1 usan `history_len=5`: veníamos prediciendo 3 s de
+futuro con 0,5 s de pasado, tirando más de la mitad del contexto que ya estaba en
+el disco.
+
+Medido antes de correr nada: pasar de 5 a 11 cuesta el **13 %** de las ventanas de
+entrenamiento (236 → 206 en el fold 0), no el 7× que uno supondría — el train ya
+tomaba una sola ventana por objeto.
+
+### El control de población, sin el cual esto no significaba nada
+
+Con `history_len=11` solo entra la ventana `f0=0`, así que la evaluación por
+defecto pasaba de 183 ventanas / 29 objetos a 24 / 24: **poblaciones distintas,
+ADE incomparables**. Por eso se agregó `--poblacion-hist` a `eval_fase1_seeds.py`,
+y los DOS brazos se evalúan con `--poblacion-hist 11`: se quedan las ventanas cuyo
+futuro arranca en el frame absoluto 11 y cuyo objeto existe también con historia
+11. El de `h=5` usa su ventana `f0=6`, el de `h=11` su `f0=0`, y **ambos predicen
+los frames 11..40 de los mismos objetos**. Verificado: la población de h=11 es
+subconjunto de la de h=5 en los 5 folds (24, 59, 40, 25, 82 objetos).
+
+Por eso `base5` se RE-EVALÚA acá y no se leen las filas de `work_dirs/noclipcv`:
+esas son de la población vieja. La diferencia no es cosmética — el mismo
+checkpoint da 3,84 en la población nueva y 4,03 en la vieja.
+
+Se descartó además que el cambio de origen falseara la comparación: con
+`norm_scale=10` fijo, la magnitud media del objetivo normalizado es 0,7058 (h=5)
+contra 0,7436 (h=11), y el máximo de h=11 es *menor*. No es la normalización.
+
+### Resultado
+
+| | ADE medio (n=40 corridas) |
+|---|---|
+| `base11` (1,1 s de historia) | 3,832 ± 1,286 |
+| `base5` (0,5 s) | 3,043 ± 1,133 |
+
+Por fold, pareado por (fold, semilla):
+
+| fold | efecto | rel | p | a favor |
+|---|---|---|---|---|
+| 0 | +1,470 | +39,7 % | 0,0064* | 0/8 |
+| 1 | +2,069 | +97,0 % | 0,0000* | 0/8 |
+| 2 | +0,079 | +1,7 % | 0,8244 | 4/8 |
+| 3 | −0,173 | −8,1 % | 0,3505 | 5/8 |
+| 4 | +0,497 | +19,4 % | 0,0611 | 1/8 |
+
+**Entre folds (n = 5 folds): +0,788 ± 0,951 · t=+1,85 · p=0,1373 · 1/5 folds.**
+
+### Lectura
+
+**La historia completa NO mejora la predicción.** Va peor en promedio y solo 1 de
+5 folds la favorece.
+
+**Pero no se puede afirmar que perjudique:** p=0,137 entre folds. Misma forma que
+el resultado de la escena.
+
+**Y la advertencia de siempre, otra vez:** dos folds dan p<0,01 *dentro del fold*
+—el fold 1 con p=0,0000 y +97 %— y el test entre folds queda en p=0,137. Es la
+undécima vez que este proyecto ve una significancia intra-fold evaporarse al
+promediar. La varianza entre folds sigue dominando.
+
+**El mecanismo, medido y no supuesto:** `base11` alcanza MENOS pérdida de
+entrenamiento que `base5` (0,0410 ± 0,0149 contra 0,0471 ± 0,0110, n=40 corridas
+cada uno) y generaliza peor. Es sobreajuste: con 206 ventanas de entrenamiento,
+darle al MLP 33 entradas en vez de 15 le alcanza para memorizar.
+
+### Lo que esto cierra
+
+Tres resultados independientes apuntan al mismo lugar:
+
+| experimento | resultado |
+|---|---|
+| 19-20: la escena LiDAR | no aporta (0/5 folds) |
+| 19: la capacidad (atención) | −0,207, 5/5 folds, pero p=0,102 |
+| **22: más contexto temporal** | **no aporta (1/5 folds), y sobreajusta** |
+
+No falta información por muestra: **faltan muestras**. 236 ventanas de
+entrenamiento desde 8 escenas, y un encoder MAE pre-entrenado con 8. El
+experimento 21 ya había localizado la brecha del encoder en cruzar entre
+*escenas*. El siguiente paso no es otra variante de arquitectura.

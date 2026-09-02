@@ -226,7 +226,7 @@ byte a byte salvo el `work_dir`.
 
 | script | qué hace |
 |---|---|
-| `eval_fase1_seeds.py` | **el evaluador**. Separa móviles de parados, agrega por escena |
+| `eval_fase1_seeds.py` | **el evaluador**. Separa móviles de parados, agrega por escena. `--poblacion-hist N` deja a dos modelos de historia distinta midiendo sobre los mismos objetos y el mismo futuro — sin eso, cambiar `history_len` cambia la población y los ADE no se comparan |
 | `agregar_resultados.py` | **el agregador**: el único camino a un número publicable. `--peso {objetos,escena}`, `--poblacion {todos,moviles}`, `--metrica {ade,fde}`, `--comparar A:B`, `--por-fold`. Deduplica, verifica cobertura pareja y tolera celdas vacías |
 | `run_fase1_cv.sh` | CV de 5 folds × 8 semillas × 3 variantes |
 | `run_noclip.sh` | fold 0 sin recorte del objetivo |
@@ -234,6 +234,7 @@ byte a byte salvo el `work_dir`.
 | `run_jointmotion.sh` | descongelamiento parcial (`finetune_blocks`) |
 | `run_noclip_cv.sh` | **la CV de los 5 folds** (0-4) en el protocolo vigente. Corrida y cerrada el 31/08 |
 | `run_gateinit.sh` | el control del **arranque del gate** (`gate_init=0.05`): 5 folds × 8 semillas, reusa los encoders de la CV |
+| `run_hist11.sh` | **la historia completa (1,1 s)**: baseline con `history_len=11` contra el de 5, 5 folds × 8 semillas. Re-evalúa `base5` porque la población cambia |
 | `diagnostico_encoder_mae.py` | **¿el encoder memorizó?** Pérdida de reconstrucción en 3 poblaciones (ventanas vistas / ventanas nuevas de escenas vistas / escenas retenidas) con máscaras pareadas, contra el modelo sin entrenar y contra predecir 0. No entrena |
 | `extract_mae_encoder.py` | renombra `backbone.*`→`encoder.*` entre pre-train y decoder |
 | `viz_un_auto.py` | trayectoria de un objeto, gate0 vs gated |
@@ -393,6 +394,15 @@ posteriores.**
     (experimento 21): los encoders **sí generalizan** —43,5 % mejor que trivial en
     escenas retenidas, 6× mejor que sin entrenar— y la brecha está en cruzar entre
     **escenas** (0,117 → 0,191), no entre ventanas (0,069 → 0,117).
+22. **Cambiar `history_len` cambia la POBLACIÓN de evaluación, no solo el modelo.**
+    Con 11 sweeps por escena, `history_len=5` admite ventanas con `f0=0..6` (183
+    ventanas de 29 objetos en el fold 0) y `history_len=11` solo `f0=0` (24 de 24).
+    Comparar los ADE directamente es comparar poblaciones distintas. Se resuelve
+    con `--poblacion-hist N` en LOS DOS brazos: alinea el futuro al frame absoluto
+    N y restringe a los objetos que existen con historia N. Verificado que la
+    población de h=11 es subconjunto de la de h=5 en los 5 folds. El mismo
+    checkpoint da 3,84 en la población alineada y 4,03 en la vieja: no es
+    cosmético. Ver experimento 22.
 
 ---
 
