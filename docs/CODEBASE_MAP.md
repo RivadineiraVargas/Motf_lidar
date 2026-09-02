@@ -1,14 +1,19 @@
 ---
-last_mapped: 2026-09-01T18:00:00Z
-total_files: 178
+last_mapped: 2026-09-02T10:53:36Z
+total_files: 185
 total_tokens: 192000
 ---
 
 # Mapa del código — MOTF
 
-> Generado por Cartographer con cuatro agentes en paralelo. Último mapeo: 2026-08-30. Modo actualización: auditoría del código nuevo.
+> Generado por Cartographer. Último mapeo: 2026-09-02. Modo actualización: tres
+> agentes en paralelo — auditoría del código nuevo, pipeline de extracción de
+> Waymo, y viabilidad de los datos de CARMEN_LCAD. El objetivo de esta pasada no
+> fue re-mapear el código sino **recalcular la ruta**: los tres resultados
+> negativos del 01-02/09 cierran la línea de variantes de arquitectura y mueven la
+> pregunta a de dónde salen los datos. Ver "La ruta" al final.
 
-**Alcance.** Este mapa cubre el **código propio del proyecto**: 178 archivos, ~192k
+**Alcance.** Este mapa cubre el **código propio del proyecto**: 185 archivos, ~192k
 tokens. Deja fuera a propósito el `mmpretrain` vendido (cientos de archivos de
 ImageNet, CLIP, BLIP, ViG y demás que nunca tocamos) y los datasets. Si buscás algo
 que no está acá, probablemente sea código de Sapiens sin modificar.
@@ -17,9 +22,9 @@ que no está acá, probablemente sea código de Sapiens sin modificar.
 |---|---|---|
 | Visor C++ | 10 | raíz del repo |
 | Pipeline de datos | 23 | `utilities/` |
-| Scripts de experimentos | 60 | `sapiens/pretrain/*.{py,sh}` |
+| Scripts de experimentos | 62 | `sapiens/pretrain/*.{py,sh}` |
 | Núcleo MOTF | 13 | `sapiens/pretrain/mmpretrain/{datasets,models}/` |
-| Configs de experimentos | 70 | `sapiens/pretrain/configs/sapiens_mae/lidar/` |
+| Configs de experimentos | 75 | `sapiens/pretrain/configs/sapiens_mae/lidar/` |
 | Hooks de Claude Code | 2 | `.claude/hooks/` |
 
 ---
@@ -78,7 +83,8 @@ números es un error que ya se cometió y produjo afirmaciones falsas.
 | **decoder_mini / Wayformer** | ago 4–18 | `waymo_clean` 25 escenas, range-view rect | `train_decoder_mini.py`, 6785 tokens | `reeval_holdout.py` | paralelo, **congelado** |
 | **Fase 1 CV** | ago 23–28 | `waymo_clean` 10 escenas, vóxeles 300 tok / range-view 128 tok | configs `f1cv_*`, `noclip_*`, `geo_*` | **`eval_fase1_seeds.py`** | **VIGENTE** |
 
-De los 60 scripts, **32 están obsoletos**. La tabla completa está más abajo.
+De los 62 scripts, **33 están obsoletos** y 8 más no están clasificados (ver el
+final de la tabla). La tabla completa está más abajo.
 
 ---
 
@@ -182,12 +188,13 @@ a propósito, para que la máscara los descarte.
 
 ## Configs — familias y cadena encoder→decoder
 
-Las 70 configs se agrupan en familias generadas por scripts. Las vigentes:
+Las 75 configs se agrupan en familias generadas por scripts. Las vigentes:
 
 | familia | qué es | encoder que carga |
 |---|---|---|
 | `f1cv_{mae,base,dec}_fold{0..4}` | la CV principal de 5 folds | `f1cv/mae_encoder_fold{F}.pth` (el de su propio fold) |
 | `noclip_{base,dec}_fold{0..4}` | sin recorte, escala fija 10 m — el protocolo vigente | `f1cv/mae_encoder_fold{F}.pth` |
+| `hist11_base_fold{0..4}` | baseline con `history_len=11` (1,1 s) — control del experimento 22 | **ninguno**: `BaselineTrajectoryModel` es puramente cinemático |
 | `geo_{mae,base,dec}_fold0` | objetivo geométrico + 7 ventanas | `geo/mae_encoder_fold0.pth` |
 | `rvcv_*` / `rvaug_*` | range-view fold 0, sin y con augmentación | `mae_encoder_rangeview.pth` |
 
@@ -249,6 +256,15 @@ byte a byte salvo el `work_dir`.
 `--eval-windows 7`, o sea el protocolo del experimento 15, y su CSV histórico tiene
 el esquema viejo de 9 columnas sin `fold`. Lo reemplaza `run_noclip.sh`, que corre el
 mismo fold con el protocolo correcto.
+
+**Sin clasificar (8).** Existen en `sapiens/pretrain/` y este mapa nunca los cubrió,
+ni como vigentes ni como obsoletos: `diag_bbox_lidar.py`, `eval_rect_loss.py`,
+`run_ambos.sh`, `run_diagnostico.sh`, `run_reeval_sinclip.sh`,
+`run_reeval_windows.sh`, `run_rv_aug_fold0.sh`, `run_rv_sinclip.sh`. Son
+diagnósticos ad hoc anteriores al 30/08 y en la práctica están obsoletos —
+`run_ambos.sh` documenta en su propio encabezado el bug del `--resume` que la
+trampa 7 da por cerrado. **No usarlos sin leerlos primero:** corren el protocolo
+viejo, así que sus números no son comparables con nada posterior al 30/08.
 
 **Obsoletos (33):** todos los `evaluate_*.py`, `eval_multi_horizon*.py`,
 `eval_uncertainty.py`, `viz_3d_open3d.py`, `viz_clean10.py`,
@@ -316,7 +332,7 @@ posteriores.**
    de promediado cambia el ADE absoluto un 7%.
 3. **`eval_fase1_seeds.py` sigue sin deduplicar al ESCRIBIR** (abre el CSV en modo
    `'a'` sin comprobar si la fila existe). Lo que protege hoy son dos capas
-   posteriores: el guard `ya_evaluado()` de los 6 `run_*.sh`, que cuenta filas en el
+   posteriores: el guard `ya_evaluado()` de los 8 `run_*.sh`, que cuenta filas en el
    CSV antes de evaluar —cuenta, no busca, porque el evaluador escribe una fila POR
    ESCENA y una evaluación muerta a mitad dejaría medio resultado—, y la
    deduplicación al leer de `agregar_resultados.py`. Una sola fila duplicada mueve la
@@ -404,6 +420,23 @@ posteriores.**
     población de h=11 es subconjunto de la de h=5 en los 5 folds. El mismo
     checkpoint da 3,84 en la población alineada y 4,03 en la vieja: no es
     cosmético. Ver experimento 22.
+23. **Las listas `scenes=[...]` están a mano en cada config y ya se desincronizaron.**
+    `clean25_baseline.py` lista **20** de las 25 escenas con datos, pese al nombre
+    (faltan `db4edc9bd0c9d18c`, `e52c6a9366981ad`, `e75176fd226ea04a`,
+    `f2ca03b1434a27e4`, `f7cc90b8f4611d4d`). `TrajectoryDataset` y
+    `LidarSequenceDataset` aceptan `scenes=None` para autodescubrir del disco, pero
+    ningún config vigente lo usa. Al agregar escenas, esto se actualiza a mano en
+    decenas de archivos: es el paso más propenso a error de todo el pipeline, y ya
+    produjo un dataset vacío en silencio por una escena mal tipeada.
+24. **Los `.bin` de Waymo están referidos al PISO, no al sensor.** Medido sobre
+    477.125 puntos dentro de ±10 m en XY: percentil 25 de z en **−0,01 m**, mediana
+    +0,53 m. Importa para cualquier dato nuevo: `spherical2cartersian` de CARMEN
+    devuelve el marco del **sensor**, donde el piso queda en **z = −1,832 m**
+    (`sensor_board_1_z` 1,482 + `velodyne_z` 0,35 de
+    `carmen-ford-escape-sensorbox.ini`). Convertir sin sumar la altura de montaje
+    mete el suelo una capa de vóxeles más abajo que Waymo: misma caja, contenido
+    desplazado 1,8 m, y el MAE aprendería una escena que no existe en el destino.
+    Un diagnóstico de transferencia daría negativo por el marco, no por los datos.
 
 ---
 
@@ -496,6 +529,110 @@ hablan los resultados actuales**.
 
 ---
 
+---
+
+## La ruta — cómo salir del cuello de datos
+
+**Estado al 2026-09-02.** Tres resultados independientes cierran la línea de
+variantes de arquitectura, y los tres apuntan al mismo lugar:
+
+| experimento | resultado | n |
+|---|---|---|
+| 19-20: la escena LiDAR | no aporta, el gate cierra a 0,0042 | 0/5 folds |
+| 19: la capacidad (atención entre objetos) | −0,207, misma dirección en todos, p=0,102 | 5/5 folds |
+| 22: la historia completa (1,1 s) | no aporta, y **sobreajusta** | 1/5 folds, p=0,137 |
+
+El experimento 21 descartó la explicación fácil: los encoders **sí generalizan**
+(43,5 % mejor que trivial en escenas retenidas, 6× mejor que sin entrenar), y la
+brecha está en cruzar entre **escenas** (0,117 → 0,191), no entre ventanas
+(0,069 → 0,117).
+
+**El cuello, medido:** el decoder entrena con **236 ventanas** desde 8 escenas y el
+encoder MAE con **8 muestras**. No falta información por muestra; faltan muestras.
+
+### Opción A — más escenas de Waymo (recomendada)
+
+Lo que ya está resuelto, verificado el 02/09:
+
+- **El shard descargado alcanza.** `waymo_raw/scenario/training.tfrecord-00000-of-01000`
+  contiene **492 escenarios** — de ahí los 492 subdirectorios de
+  `waymo_clean/bin_files/`, de los que solo 25 tienen datos. Para llegar a 200 no
+  hace falta otro shard.
+- **Las etiquetas vienen gratis.** Los `centers` salen del shard de *scenario*, no
+  del de *lidar* (`save_point_cloud_data_fixed.py:152-156` →
+  `TrajectoryDataset.parse_bbox_file`). El shard ya trae los tracks de los 492
+  escenarios por 91 frames; por eso `objs_bbox/` está poblado para escenas que no
+  tienen LiDAR.
+- **El bucket responde.** `gs://waymo_open_dataset_motion_v_1_2_0/uncompressed/lidar/training/`
+  lista bien con la cuenta ya autenticada. Cada `.tfrecord` pesa **4,65 MiB**: 175
+  escenas más son ~815 MB, contra 417 GB libres.
+
+Lo que hay que resolver, y es manual:
+
+1. **`utilities/list_scene_ids.py` no está en esta rama.** Existe solo en el commit
+   `872c789` de la rama `bugs`. Traerlo con cherry-pick o reescribirlo (38 líneas).
+2. **No hay script de descarga versionado.** `docs/NEXT_SESSION.md:51-61` da la
+   plantilla de un `for sid in ...; do gsutil cp ...; done` en un comentario, y
+   advierte que `gsutil cp -I` tiene un bug que corta en 2 archivos. Conviene
+   commitear el loop con reintentos.
+3. **Re-correr la extracción** con `save_point_cloud_data_fixed.py` (la versión
+   corregida; `save_point_cloud_data.py` es la del colega, con los dos bugs de
+   asociación de tracks y horizonte capado). Es seguro re-correrla: solo escribe
+   LiDAR para los ids cuyo `.tfrecord` exista, y sobrescribe sin acumular.
+4. **Actualizar las listas `scenes=[...]`** a mano — ver la trampa 23.
+
+**No determinado:** el tiempo real de extracción por escena. No hay benchmark ni log
+de ese paso en `docs/`; medirlo con una escena antes de lanzar 175.
+
+### Opción B — CARMEN_LCAD para el MAE (segunda fase)
+
+`/dados` tiene 5 logs `log_volta_da_ufes_*` con **51.716 scans** de Velodyne HDL-32E
+a 20 Hz, ~43 min de conducción, contra los 275 sweeps de Waymo. Sirven para el MAE
+—que es auto-supervisado— pero **no para el decoder**: los logs no traen objetos
+anotados (solo `VELODYNE_PARTIAL_SCAN_IN_FILE`, `NMEAGGA`, `XSENS_QUAT`,
+`CAMERA1_MESSAGE`, `ROBOTVELOCITY_ACK`, `FORD_ESCAPE_STATUS`; los
+`rddf_annotation_*` anotan la vía).
+
+El conversor no existe en este repo, pero la lógica sí, en `carmen_lcad`:
+
+| pieza | dónde |
+|---|---|
+| lector de `.pointcloud` | `src/segmap/libsegmap/readers/carmen_lidar_reader.cpp` — `CarmenLidarLoader::next()` |
+| esférico → cartesiano | `src/segmap/libsegmap/types/segmap_conversions.cpp:101` |
+| prueba sobre estos logs | `src/deep_vgl/readlog.cpp` abre un `/dados/log_volta_da_ufes_*.pointcloud` |
+| lista ordenada de sweeps | `src/segmap/scripts/preprocessing/step0_parse_and_sync.py` |
+
+Tres trampas que corromperían el resultado en silencio:
+
+- **`velodyne_ray_order`.** Los 32 rangos de cada disparo no vienen en orden de
+  ángulo vertical. Sin reordenar, cada rango se empareja con el haz equivocado.
+- **Ceros a la izquierda en los nombres.** `LidarSequenceDataset` ordena con
+  `sorted()` de strings: sin padding, `10.bin` va antes que `2.bin`.
+- **El marco de referencia en z.** Ver la trampa 24 — es la que más caro sale.
+
+Y una limitación de fondo: el HDL-32E tiene 32 haces contra los 64 de Waymo, y **16
+de esos 32 pegan el piso dentro de los ±10 m** (a 1,832 m de altura, el haz de
+−10,67° impacta a 9,89 m). Aporta ~17.400 puntos por sweep dentro de la ventana,
+contra los **47.703 medidos en Waymo** — o sea que es más *disperso*, no más denso.
+La ocupación de Waymo hoy es del 35,9 % de los 300 vóxeles.
+
+### El orden que sugiere la evidencia
+
+**A antes que B.** Waymo da etiquetas, no tiene cambio de dominio, y el trabajo es
+descargar y re-correr un script que ya existe. CARMEN pide escribir un conversor,
+no sirve para el decoder, y arrastra tres trampas silenciosas más un cambio de
+sensor.
+
+**Y hay un test barato que decide B sin comprometerse:** pre-entrenar el MAE con
+CARMEN y medir con `diagnostico_encoder_mae.py` la reconstrucción sobre las escenas
+**retenidas de Waymo**. Hoy da **0,1913**. Si baja, transfiere.
+
+Queda abierta la explicación que ninguno de estos experimentos toca: que el objetivo
+de pre-entrenamiento (ocupación) sea el equivocado. Es la crítica de GeoMAE, ya
+anotada en `mae_head_4d.py`, y lo que propone JointMotion.
+
+---
+
 ## Automatización (hooks)
 
 Dos reglas del proyecto están puestas en el sistema, no en la memoria de nadie
@@ -539,3 +676,14 @@ las variantes sin recorte está en la cabecera de `run_noclip_cv.sh`.
 
 **Para publicar cualquier número:** `agregar_resultados.py`, nunca a mano. Declarar la
 convención de promediado, el número de folds y el de semillas ANTES de la tabla.
+
+**Para agregar escenas de Waymo:** traer `utilities/list_scene_ids.py` de la rama
+`bugs` (commit `872c789`) → loop `gsutil cp` sobre
+`gs://waymo_open_dataset_motion_v_1_2_0/uncompressed/lidar/training/<id>.tfrecord`
+→ `save_point_cloud_data_fixed.py` (la **corregida**, no `save_point_cloud_data.py`)
+→ actualizar las listas `scenes=[...]` de los configs a mano. Ver "La ruta".
+
+**Para meter datos de un sensor nuevo:** el contrato del `.bin` es float32 `Nx4`
+`[x,y,z,intensidad]`, con la intensidad **sin usar** (el grid es de ocupación
+binaria) y **z referido al piso** (trampa 24). Nombres con ceros a la izquierda,
+porque el dataset ordena con `sorted()` de strings.

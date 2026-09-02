@@ -28,6 +28,15 @@ modificar.
    vigente). Mezclar sus números es un error ya cometido.
 4. **El visor usa `waymo_clean_view`, nunca `waymo_clean`.**
 
+**Estado al 02/09/2026.** Tres resultados independientes cierran la línea de
+variantes de arquitectura: la escena LiDAR no aporta (0/5 folds), la capacidad va
+en la misma dirección en los cinco folds pero no llega a significancia (p=0,102), y
+la historia completa de 1,1 s no mejora y sobreajusta (1/5 folds). El encoder **sí**
+generaliza, así que no es eso. El cuello está medido: 236 ventanas de entrenamiento
+desde 8 escenas, y un MAE pre-entrenado con 8 muestras. **El próximo paso es más
+datos, no otra arquitectura** — ver la sección "La ruta" del mapa.
+
 Ver [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) para la arquitectura, el flujo de
-datos, las trampas y la guía de navegación. Ver `docs/EXPERIMENTOS_DECODER.md` para
-los 18 experimentos con sus números y comandos de reproducción.
+datos, las 24 trampas, la guía de navegación y **la ruta**. Ver
+`docs/EXPERIMENTOS_DECODER.md` para los 22 experimentos con sus números y comandos
+de reproducción.
