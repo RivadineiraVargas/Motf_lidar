@@ -50,9 +50,28 @@ def main():
                     help='ventanas temporales por objeto (B2 de la auditoría). '
                          '1 = comportamiento histórico; 7 = tope que permiten los '
                          '11 sweeps de LiDAR con history_len=5.')
+    ap.add_argument('--cfg-options', nargs='+', default=None,
+                    metavar='CLAVE=VALOR',
+                    help='sobreescribe entradas del config, igual que en '
+                         'tools/train.py. Ej.: model.num_modes=6. En el flujo '
+                         'normal NO hace falta: el config de entrenamiento ya '
+                         'declara num_modes y este evaluador lee ESE config, así '
+                         'que el K de la evaluación es el mismo con el que se '
+                         'entrenó por construcción.')
     args = ap.parse_args()
     init_default_scope('mmpretrain')
     cfg = Config.fromfile(args.cfg)
+    if args.cfg_options:
+        d = {}
+        for kv in args.cfg_options:
+            if '=' not in kv:
+                raise SystemExit(f'--cfg-options espera CLAVE=VALOR, no {kv!r}')
+            k, v = kv.split('=', 1)
+            try:
+                d[k] = eval(v, {'__builtins__': {}})   # números, listas, True/False
+            except Exception:
+                d[k] = v                                # strings sueltos
+        cfg.merge_from_dict(d)
     dev = 'cuda'
 
     model = MODELS.build(cfg.model)
@@ -118,6 +137,14 @@ def main():
                              f'e history_len={h}: no hay nada que medir.')
 
     is_baseline = 'Baseline' in cfg.model['type']
+    # num_modes vive en el modelo construido, no en el config: así respeta un
+    # --cfg-options model.num_modes=6 y no miente si el config no lo declara.
+    K = int(getattr(model, 'num_modes', 1))
+    es_multimodal = K > 1
+    if es_multimodal:
+        print(f'[eval] modelo MULTIMODAL con K={K}: se reportan ade_all (modo más '
+              f'probable, comparable con los exp. 15-22) y min_ade_k (el mejor de '
+              f'los {K}, comparable con la literatura).')
     per_scene = {}
     pred_len = cfg.pred_len
     for i in range(len(ds.data_list)):
@@ -127,32 +154,82 @@ def main():
         # el dataset normaliza cada trayectoria con su propia media/desvío.
         with torch.no_grad():
             h = d['obj_history_flat'].unsqueeze(0).to(dev)
-            # el baseline (BaselineTrajectoryModel) NO recibe la escena
-            pred_flat = (model(h, mode='predict') if is_baseline else
-                         model(d['inputs'].unsqueeze(0).to(dev), h,
-                               mode='predict')).cpu()
-        pred = (pred_flat.view(pred_len, 3) * d['norm_std'] + d['norm_mean']).numpy()
+            escena = None if is_baseline else d['inputs'].unsqueeze(0).to(dev)
+            # OJO con el nombre: `args` es el Namespace de argparse y se usa más
+            # abajo (args.out). Llamar así a esta tupla lo tapaba y reventaba al
+            # escribir el CSV, después de evaluarlo todo.
+            entrada = (h,) if is_baseline else (escena, h)
+            # 'predict' devuelve el modo MÁS PROBABLE (con K=1, el único). Es lo
+            # que mantiene esta métrica comparable con los experimentos 15-22.
+            pred_flat = model(*entrada, mode='predict').cpu()
+            # 'predict_multi' devuelve las K hipótesis. Solo se pide si el modelo
+            # es multimodal: un modelo de K=1 no tiene minADE que reportar, y
+            # pedírselo daría exactamente el mismo número dos veces.
+            modos = None
+            if es_multimodal:
+                modos, _ = model(*entrada, mode='predict_multi')
+                modos = modos.cpu()
+
+        def a_metros(t):
+            return (t.view(-1, pred_len, 3) * d['norm_std'] + d['norm_mean']).numpy()
+
+        pred = a_metros(pred_flat)[0]
         gt = (d['obj_future_flat'].view(pred_len, 3) * d['norm_std'] + d['norm_mean']).numpy()
         err = np.linalg.norm(pred[:, :2] - gt[:, :2], axis=1)          # solo XY
         # desplazamiento REAL del objeto: define si es móvil (B5)
         despl = float(np.linalg.norm(gt[-1, :2] - gt[0, :2]))
-        per_scene.setdefault(scene, []).append((float(err.mean()), float(err[-1]), despl))
+
+        # minADE_k / minFDE_k: el error del MEJOR de los K modos, que es la
+        # métrica de WOMD y la que reportan Wayformer, MTR y MotionLM. NO es
+        # comparable con el ADE de arriba: con K modos el mínimo siempre es menor
+        # o igual, así que un k=6 se ve mejor que un k=1 aunque no haya aprendido
+        # nada. Por eso se guardan LAS DOS y el agregador las trata por separado.
+        if modos is None:
+            min_ade, min_fde = float(err.mean()), float(err[-1])
+        else:
+            todos = a_metros(modos.squeeze(0))                  # (K, pred_len, 3)
+            e = np.linalg.norm(todos[:, :, :2] - gt[None, :, :2], axis=2)  # (K, T)
+            ade_k = e.mean(axis=1)
+            # El mejor modo para ADE y para FDE puede NO ser el mismo. WOMD define
+            # minADE y minFDE como mínimos independientes, así que se toman aparte.
+            min_ade, min_fde = float(ade_k.min()), float(e[:, -1].min())
+
+        per_scene.setdefault(scene, []).append(
+            (float(err.mean()), float(err[-1]), despl, min_ade, min_fde))
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     new = not os.path.exists(args.out)
     with open(args.out, 'a', newline='') as fh:
         w = csv.writer(fh)
         if new:
+            # Dos columnas NUEVAS al final: el esquema viejo de 11 se lee igual,
+            # porque agregar_resultados.py indexa por nombre de columna y no por
+            # posición. Un CSV de 11 columnas y uno de 13 conviven en la misma
+            # corrida del agregador; las celdas faltantes quedan vacías.
+            # Cuatro columnas NUEVAS al final. Los nombres siguen el patrón
+            # {métrica}_{población} que agregar_resultados.py arma en `leer()`
+            # (`col = f'{metrica}_{"moving"|"all"}'`), así que basta con agregar
+            # 'minade'/'minfde' a --metrica y funciona sin más código. Un CSV de
+            # 11 columnas y uno de 15 conviven en la misma corrida del agregador,
+            # porque lee con csv.DictReader (por nombre, no por posición).
             w.writerow(['fold', 'variant', 'seed', 'scene', 'n_obj', 'n_moving',
-                        'ade_all', 'fde_all', 'ade_moving', 'fde_moving', 'gate'])
+                        'ade_all', 'fde_all', 'ade_moving', 'fde_moving', 'gate',
+                        'minade_all', 'minfde_all', 'minade_moving', 'minfde_moving'])
         for sc, v in sorted(per_scene.items()):
             a = np.array([x[0] for x in v]); f = np.array([x[1] for x in v])
             mv = np.array([x[2] for x in v]) >= MOVING_MIN
+            ma = np.array([x[3] for x in v]); mf = np.array([x[4] for x in v])
             w.writerow([args.fold, args.variant, args.seed, sc, len(v), int(mv.sum()),
                         f'{a.mean():.5f}', f'{f.mean():.5f}',
                         f'{a[mv].mean():.5f}' if mv.any() else '',
                         f'{f[mv].mean():.5f}' if mv.any() else '',
-                        f'{gate:.5f}'])
+                        f'{gate:.5f}',
+                        # Con K=1 estas son iguales a ade_all/fde_all por
+                        # definición (el mínimo sobre un solo modo). Se escriben
+                        # igual para que el esquema sea uno solo.
+                        f'{ma.mean():.5f}', f'{mf.mean():.5f}',
+                        f'{ma[mv].mean():.5f}' if mv.any() else '',
+                        f'{mf[mv].mean():.5f}' if mv.any() else ''])
     print(f'[eval] {args.variant} seed {args.seed}: '
           + ', '.join(f'{sc} n={len(v)}' for sc, v in sorted(per_scene.items())))
 
