@@ -1,5 +1,5 @@
 ---
-last_mapped: 2026-09-02T10:53:36Z
+last_mapped: 2026-09-03T10:59:06Z
 total_files: 185
 total_tokens: 192000
 ---
@@ -613,6 +613,23 @@ disco**, y su resultado **todavía no es bueno**:
 
 Los ítems 7 y 10 no están esperando datos: están esperando que 10 y 100 den un
 resultado que valga la pena escalar. El trabajo vigente es **mejorar ahí**.
+
+**La escalera es del ENCODER, no del decoder — y no son la misma escala.**
+Confusión fácil y vale aclararla:
+
+| | unidad | qué se corrió |
+|---|---|---|
+| encoder (escalera de Claudine) | **sweeps** | 10 sweeps de UNA escena (exp. 23); 100 sweeps de 24 escenas (ítem 6) |
+| decoder (Fase 1, exp. 15-22) | **escenas** | 10 escenas = 8 train + 2 val = **110 sweeps** |
+
+El decoder **nunca corrió sobre 10 sweeps**, y no puede: cada ventana necesita
+`history_len + pred_len` = **35 frames de etiquetas** de trayectoria, que Waymo
+entrega por escena (91 frames de etiquetas contra 11 sweeps de LiDAR). Diez sweeps
+sueltos no alcanzan para construir una sola ventana de entrenamiento.
+
+O sea que el ítem 5 de Claudine ("overfit 10 sweeps") es una prueba del **encoder**
+y está cumplido; el decoder corre sobre 10 escenas, que es otra cosa. Los dos usan
+"10" y por eso se confunden.
 
 ### Opción A — más escenas de Waymo (cuando la puerta se abra)
 
