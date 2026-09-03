@@ -1868,3 +1868,104 @@ fijaron al escribir el barrido, no después de ver el resultado.
 
 **Regla que queda:** todo hiperparámetro elegido por barrido se valida en folds que
 no participaron de la elección, y el número que se reporta es el de esos folds.
+
+---
+
+## Experimento 26: la época del encoder no cambia nada — la adenda del 23 queda cerrada
+
+**Fecha:** 2026-09-03 · **Rama:** `decoder/multimodal-wta`
+**Scripts:** `run_curva_mae.sh` + `curva_mae_voxel.py`
+**CSV:** `work_dirs/f1cv_curva/curva_fold{0..4}.csv`
+**n = 5 folds × 101 checkpoints** (épocas 10..1000 cada 10, más el modelo sin entrenar),
+4 máscaras pareadas por ventana, población `val` = las 2 escenas RETENIDAS de cada fold.
+
+### Por qué
+
+La adenda del experimento 23 midió las épocas 600/800/1000 y no encontró
+degradación, pero dejó dicho lo que no podía probar: el config tiene
+`checkpoint=dict(interval=200, max_keep_ckpts=3)`, así que eso es **el último 40 %**
+y en disco no quedaba nada anterior. En range-view el óptimo estaba en la época 50
+de 6000 (0,8 % de la corrida); el equivalente acá sería la época ~8, y un pico así
+de temprano se vería exactamente como la meseta plana que midió la adenda.
+
+Importaba porque **toda la Fase 1 (exp. 19-22) usó `epoch_1000`**, y es el conjunto
+que respondió que la escena no aporta (0/5 folds).
+
+### El control de sanidad, primero
+
+Misma semilla y mismo config, solo cambia el hook de checkpoint. La época 1000 de la
+curva reproduce el valor de la adenda en los cinco folds:
+
+| fold | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| diferencia vs adenda | −0,0000 | −0,0000 | +0,0000 | −0,0000 | +0,0025 |
+
+La curva es comparable con la adenda tensor a tensor.
+
+### El "mejor checkpoint" es un artefacto, y hay que decirlo
+
+`curva_mae_voxel.py` imprime la época de menor pérdida. Esas épocas son
+**530, 450, 960, 30 y 100** — dispersas por todo el rango. En el fold 0 el mínimo
+cae a **−2,69 sd** de la media de los 91 checkpoints posteriores a la época 100, y
+el máximo a +2,42 sd: exactamente los extremos que produce tomar el mejor de 91
+sorteos con sd 0,0052.
+
+**Ese número no se cita.** Es la trampa 29 —elegir el mejor de muchos sobre una sola
+medición— en otra forma. La lectura correcta promedia el ruido en ventanas gruesas.
+
+### Resultado 1 — ¿se degrada al final? No
+
+Meseta (épocas 100-600) contra último tercio (700-1000), fold por fold:
+
+| fold | meseta | último tercio | efecto |
+|---|---|---|---|
+| 0 | 0,1867 | 0,1933 | +3,6 % |
+| 1 | 0,2273 | 0,2501 | +10,0 % |
+| 2 | 0,1440 | 0,1291 | **−10,4 %** |
+| 3 | 0,1630 | 0,1611 | −1,1 % |
+| 4 | 0,1727 | 0,2001 | +15,9 % |
+
+**Entre folds: +0,0080 ± 0,0175 · t=1,03 · p=0,36 · 3/5 folds.**
+
+No hay degradación sistemática. El fold 0 solo daba +3,6 % y parecía una señal; el
+fold 2 va en dirección contraria por −10,4 %. La varianza entre folds se come el
+efecto — el patrón de siempre en este proyecto, y la razón de la regla 2.
+
+### Resultado 2 — ¿hay un pico temprano como en range-view? Tendencia, no
+
+Épocas 10-100 contra el resto (110-1000):
+
+| fold | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| efecto | −2,8 % | −10,3 % | **+7,4 %** | −16,2 % | −11,3 % |
+
+**Entre folds: −0,0134 ± 0,0155 · −6,6 % · t=−1,92 · p=0,127 · 4/5 folds.**
+
+Cuatro de cinco folds prefieren las épocas tempranas, pero no llega a significancia.
+Es el mismo territorio que el hallazgo de capacidad (p=0,102, 5/5 folds): una
+dirección consistente que no alcanza el umbral con n=5.
+
+### Lo que se concluye
+
+**La elección de época del encoder no compromete los experimentos 19-22.** Toda la
+caída ocurre antes de la época 10 (0,748 → 0,188 en el fold 0); después la curva es
+ruido alrededor de una meseta. `epoch_1000` es defendible.
+
+La adenda del experimento 23 queda **cerrada**, y con mucho mejor respaldo: no era
+que sus tres mediciones cayeran después de un pico, es que **no hay un pico**.
+
+### Lo que este experimento NO tocó, y es lo que importa
+
+Todo esto mide **pérdida de reconstrucción del MAE**. El vínculo entre reconstrucción
+y ADE **nunca se estableció en este proyecto**: no hay ninguna medición de que un
+encoder que reconstruye mejor produzca una trayectoria mejor.
+
+O sea que aun si el pico temprano hubiera dado significativo, no se seguía que
+re-correr los exp. 19-20 con esa época mejorara nada. El seguimiento que se había
+fijado de antemano —re-correr con la época 300— **no se dispara**, y de todos modos
+habría sido un salto por encima de un eslabón sin medir.
+
+Ese eslabón es medible y es barato: el fold 3 tiene un 27 % de diferencia de
+reconstrucción entre la época 30 y la 1000. Correr el decoder con los dos encoders y
+comparar el ADE responde si la reconstrucción predice algo del desempeño río abajo —
+una pregunta más básica que cualquiera de las que veníamos haciendo.

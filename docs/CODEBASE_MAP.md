@@ -491,6 +491,12 @@ posteriores.**
     conclusión fue fijar la partición **antes** de mirar los resultados. El número
     que se reporta es el de los folds retenidos, nunca el del barrido.
 
+    **Segunda forma, misma trampa:** tomar la mejor época de una curva de
+    checkpoints. En el experimento 26 las "mejores épocas" de los cinco folds
+    salieron **530, 450, 960, 30 y 100**, y en el fold 0 el mínimo cae a −2,69 sd
+    de los 91 checkpoints —justo el extremo que produce el mejor de 91 sorteos con
+    sd 0,0052—. La lectura correcta promedia el ruido en ventanas gruesas.
+
 ---
 
 ## El hueco de reproducibilidad
