@@ -1,0 +1,3 @@
+fold,variant,seed,scene,n_obj,n_moving,ade_all,fde_all,ade_moving,fde_moving,gate,minade_all,minfde_all,minade_moving,minfde_moving
+0,enc_mejor,0,7e2f727866c69ea0,84,83,7.70946,15.39699,7.78308,15.56162,0.50000,7.70946,15.39699,7.78308,15.56162
+0,enc_mejor,0,82f90331a1dfe968,99,98,3.65330,5.90712,3.67799,5.95629,0.50000,3.65330,5.90712,3.67799,5.95629
