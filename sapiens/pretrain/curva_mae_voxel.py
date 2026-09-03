@@ -64,6 +64,12 @@ from diagnostico_encoder_mae import (D, escenas_val, construir_pobl,
 
 # Valores de la adenda del exp. 23 (población `val`, época 1000) para el control
 # de sanidad. Fuente: docs/EXPERIMENTOS_DECODER.md, "Adenda al 23".
+#
+# MEDIDOS CON 4 MASCARAS, y el doc no lo dice: hay que dejarlo acá. Verificado
+# midiendo el mismo checkpoint del fold 0 con las dos densidades —4 da 0,1939,
+# que es el valor de la adenda; 8 da 0,1960—. Por eso `--mascaras` tiene default
+# 4 y run_curva_mae.sh pasa 4: subirlo a 8 no mide "mejor", mide OTRA cosa y
+# rompe la comparabilidad con la adenda, que es el punto del control.
 ADENDA_EP1000 = {0: 0.1939, 1: 0.2445, 2: 0.1261, 3: 0.1632, 4: 0.2060}
 
 
@@ -72,10 +78,14 @@ def main():
     ap.add_argument('--fold', type=int, required=True)
     ap.add_argument('--work-dir', required=True,
                     help='dir con los epoch_*.pth densos del re-pre-entrenamiento')
-    ap.add_argument('--mascaras', type=int, default=8)
+    ap.add_argument('--mascaras', type=int, default=4,
+                    help='4 es lo que usó la adenda del exp. 23; ver ADENDA_EP1000')
     ap.add_argument('--cada', type=int, default=1,
                     help='evaluar 1 de cada N checkpoints')
     ap.add_argument('--out', default=None)
+    ap.add_argument('--forzar', action='store_true',
+                    help='sobrescribir un CSV existente aunque tenga MAS puntos '
+                         'que la corrida actual (ver el guard de abajo)')
     args = ap.parse_args()
 
     init_default_scope('mmpretrain')
@@ -111,6 +121,25 @@ def main():
 
     out = args.out or f'{args.work_dir}/curva_mae_voxel.csv'
     os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
+
+    # GUARD ANTIBORRADO. El CSV se abre en 'w' al final, así que una corrida con
+    # POCOS checkpoints pisa la curva de una corrida con MUCHOS. Y eso no es
+    # hipotético: run_curva_mae.sh poda los checkpoints al terminar —deja el mejor
+    # y el 1000—, de modo que volver a correr el mismo fold encuentra 2, mide una
+    # "curva" de 2 puntos y borra la de 101 sin decir nada. El experimento 26
+    # entero vive en estos CSV.
+    if os.path.exists(out) and not args.forzar:
+        with open(out) as fh:
+            previas = max(sum(1 for _ in fh) - 1, 0)
+        if previas > len(cks) + 1:      # +1 por la fila 'sin_entrenar'
+            raise SystemExit(
+                f'{out} ya tiene {previas} puntos y esta corrida solo mediría '
+                f'{len(cks) + 1} ({len(cks)} checkpoints en {args.work_dir}).\n'
+                f'Sobrescribirlo perdería la curva. Si los checkpoints fueron '
+                f'podados, la curva YA está medida y no hay nada que rehacer; '
+                f'para re-medir de verdad hay que re-entrenar primero.\n'
+                f'Usar --forzar solo si de verdad se quiere pisar el CSV.')
+
     filas = []
 
     for etiqueta, ruta in ([('sin_entrenar', None)] +

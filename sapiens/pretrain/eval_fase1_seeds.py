@@ -202,10 +202,6 @@ def main():
     with open(args.out, 'a', newline='') as fh:
         w = csv.writer(fh)
         if new:
-            # Dos columnas NUEVAS al final: el esquema viejo de 11 se lee igual,
-            # porque agregar_resultados.py indexa por nombre de columna y no por
-            # posición. Un CSV de 11 columnas y uno de 13 conviven en la misma
-            # corrida del agregador; las celdas faltantes quedan vacías.
             # Cuatro columnas NUEVAS al final. Los nombres siguen el patrón
             # {métrica}_{población} que agregar_resultados.py arma en `leer()`
             # (`col = f'{metrica}_{"moving"|"all"}'`), así que basta con agregar

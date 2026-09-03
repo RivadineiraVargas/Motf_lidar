@@ -56,6 +56,18 @@ for F in $FOLDS; do
     N=$(ls $WD/epoch_*.pth 2>/dev/null | wc -l)
     echo "  $N checkpoints · $(du -sh $WD 2>/dev/null | cut -f1) · $(date '+%H:%M')"
 
+    # Guard de reanudación: el bloque de abajo MIDE y después PODA los
+    # checkpoints. Sin esto, volver a correr un fold ya terminado saltea el
+    # entrenamiento (epoch_1000.pth existe), encuentra los 2 checkpoints que
+    # sobrevivieron a la poda anterior, y pisa el CSV de 101 puntos con uno de 2.
+    # El uso documentado en la cabecera —piloto de un fold y después los cinco—
+    # cae justo en ese caso. curva_mae_voxel.py tiene su propio guard, este
+    # evita además gastar la GPU al pedo.
+    if [ -f "$BASE/curva_fold${F}.csv" ] && [ "$N" -le 2 ]; then
+        echo "  (curva ya medida y checkpoints ya podados — salteo el fold $F)"
+        continue
+    fi
+
     python -u curva_mae_voxel.py --fold $F --work-dir $WD --mascaras 4 \
         --out $BASE/curva_fold${F}.csv > $WD.curva.log 2>&1 \
         || { echo "!!! fallo midiendo la curva del fold $F — ver $WD.curva.log"; continue; }
