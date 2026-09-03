@@ -173,3 +173,68 @@ efecto  +0,788 ± 0,951   t=+1,85   p=0,137   1/5 folds
 3. **El cuello es de datos, no de arquitectura.** Tres negativos independientes
    —escena, capacidad, contexto temporal— apuntan al mismo lugar: 236 ventanas de
    entrenamiento desde 8 escenas, y un MAE pre-entrenado con 8 muestras.
+
+## Multimodalidad k=6: minADE mejora mientras la predicción empeora
+
+**n = 5 folds × 8 semillas × 2 escenas de validación** (160 filas). Comparación
+pareada por (fold, semilla); el test entre folds usa **n = 5 folds**, no 40 corridas.
+
+**CSV:** `sapiens/pretrain/work_dirs/multimodal/multimodal_results.csv`
+**Commit:** `d8612f9` · **Rama:** `decoder/multimodal-wta` · **Fecha:** 2026-09-03
+
+| métrica | k=1 | k=6 | efecto | p | folds a favor |
+|---|---|---|---|---|---|
+| ADE (modo más probable) | 2,988 | 3,285 | +0,298 | 0,036 | 0/5 |
+| FDE (modo más probable) | 6,433 | 6,937 | +0,504 | 0,041 | 1/5 |
+| minADE_6 | 2,988 | 2,264 | −24 % | 0,005 | 5/5 |
+| minFDE_6 | 6,433 | 4,479 | −44 % | 0,006 | 5/5 |
+
+Recalcular:
+
+```bash
+cd sapiens/pretrain
+python agregar_resultados.py work_dirs/multimodal/multimodal_results.csv \
+    --comparar baseline_k6:baseline_k1 --por-fold
+python agregar_resultados.py work_dirs/multimodal/multimodal_results.csv \
+    --comparar baseline_k6:baseline_k1 --metrica minade --por-fold
+```
+
+**Qué se puede afirmar:** que el k=6 con `cls_weight=1.0` empeora la predicción real
+de forma significativa (0/5 folds), y que las métricas `min*` de la literatura dicen
+lo contrario sobre exactamente la misma corrida.
+
+**Qué NO se puede afirmar:** que la multimodalidad no sirva en general — solo se
+probó `cls_weight=1.0`, y el diagnóstico apunta a que ese peso está mal calibrado.
+Tampoco hay nada sobre el modelo con escena: el brazo `gate0_k6` se canceló y **no
+existen números suyos**.
+
+## `cls_weight` no salva la multimodalidad
+
+**Test independiente: n = 3 folds (2, 3, 4) × 8 semillas**, retenidos de la elección.
+Tabla completa: n = 5 folds × 8 semillas, con los folds 0-1 **sesgados**.
+
+**CSV:** `sapiens/pretrain/work_dirs/clsweight_val/clsweight_val_results.csv`
+(+ `clsweight/` y `multimodal/`) · **Commit:** `26386af` · **Fecha:** 2026-09-03
+
+| | efecto vs k=1 | p | folds |
+|---|---|---|---|
+| ADE — 3 folds retenidos | +0,224 ± 0,113 | 0,075 | 0/3 |
+| ADE — 5 folds (0-1 sesgados) | +0,069 ± 0,250 | 0,57 | 2/5 |
+| minADE_6 — 5 folds | −0,858 (−29 %) | 0,003 | 5/5 |
+
+Recalcular:
+
+```bash
+cd sapiens/pretrain
+python agregar_resultados.py work_dirs/clsweight_val/clsweight_val_results.csv \
+    work_dirs/multimodal/multimodal_results.csv \
+    --comparar k6w005:baseline_k1 --por-fold      # mirar solo folds 2,3,4
+```
+
+**Qué se puede afirmar:** que ningún `cls_weight` probado (0,01 / 0,05 / 0,2 / 1,0)
+mejora la predicción real, y que el patrón del exp. 24 —minADE mejora mucho, ADE no—
+replica en folds independientes con otro hiperparámetro.
+
+**Qué NO se puede afirmar:** que `cls_weight=0,05` mejore nada. El −0,264 del barrido
+salió de los mismos 2 folds donde se lo eligió y **se dio vuelta** en los retenidos.
+Ese número no se cita.
