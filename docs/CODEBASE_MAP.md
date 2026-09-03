@@ -472,6 +472,16 @@ posteriores.**
     hoy tomaría **612 imágenes incluyendo `val/` y `unseen/`** — fuga en el split
     de evaluación. Correr `rect_overfit10_val.py` en su lugar.
 
+28. **`minADE_k` / `minFDE_k` son un ORÁCULO, no una predicción.** Toman el mejor de
+    los K modos *sabiendo cuál fue el futuro real*: miden si entre las hipótesis hay
+    una buena, no si el modelo sabe elegirla. Con K=1 coinciden con ADE/FDE; con K>1
+    son una métrica distinta, y compararlas contra el ADE de un modelo unimodal —que
+    es lo que hace la literatura— es comparar un oráculo contra una predicción.
+    Medido en el experimento 24 sobre 5 folds × 8 semillas: el k=6 mejoró minADE un
+    **24 %** y minFDE un **44 %** (5/5 folds, p<0,01) mientras su predicción real
+    **empeoraba** 0,298 de ADE (0/5 folds, p=0,036). **Toda métrica `min*` se reporta
+    junto a la del modo más probable, nunca sola.**
+
 ---
 
 ## El hueco de reproducibilidad

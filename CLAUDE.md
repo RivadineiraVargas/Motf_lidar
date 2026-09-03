@@ -49,6 +49,6 @@ bueno**: a 100 sweeps el encoder pica cerca de la época 1000 y después memoriz
 "La ruta" en el mapa, que arranca con la puerta.
 
 Ver [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) para la arquitectura, el flujo de
-datos, las 24 trampas, la guía de navegación y **la ruta**. Ver
+datos, las 28 trampas, la guía de navegación y **la ruta**. Ver
 `docs/EXPERIMENTOS_DECODER.md` para los 22 experimentos con sus números y comandos
 de reproducción.

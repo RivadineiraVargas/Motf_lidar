@@ -1675,3 +1675,109 @@ después de la caída y una meseta baja se vería exactamente así de plana. Lo 
 es *"¿se degrada en el último 40 %?"* (no), no *"¿es la 1000 la mejor época?"*
 (abierto). Distinguirlo cuesta ~1,6 h de re-pre-entrenamiento con checkpoints cada
 25 épocas.
+
+---
+
+## Experimento 24: multimodal k=6 — la métrica de la literatura mejora 44 % mientras la predicción empeora
+
+**Fecha:** 2026-09-03 · **Rama:** `decoder/multimodal-wta`
+**Script:** `run_multimodal.sh` · **CSV:** `work_dirs/multimodal/multimodal_results.csv`
+**n = 5 folds × 8 semillas × 2 escenas de validación** (160 filas, comparación
+pareada por (fold, semilla); el test entre folds usa **n = 5**, no 40).
+
+Reproducir:
+
+```bash
+python agregar_resultados.py work_dirs/multimodal/multimodal_results.csv \
+    --comparar baseline_k6:baseline_k1 --por-fold                 # ADE real
+python agregar_resultados.py work_dirs/multimodal/multimodal_results.csv \
+    --comparar baseline_k6:baseline_k1 --metrica minade --por-fold  # minADE_6
+```
+
+### Por qué
+
+Wayformer y MTR no predicen **una** trayectoria sino **K hipótesis**, entrenadas con
+pérdida *winner-takes-all* (solo el modo más cercano al futuro real recibe gradiente
+de regresión) y una cabeza de clasificación que aprende a puntuarlas. Es una de las
+tres brechas metodológicas identificadas frente a esos papers. Se implementó en
+`trajectory_model_attn.py` y `baseline_model.py` con `num_modes=K` y `cls_weight`.
+
+Se midió sobre el **baseline cinemático**, no sobre el modelo con escena: la
+arquitectura grande tarda 8× por corrida, y la pregunta —¿sirve la multimodalidad?—
+no depende de la escena. `num_modes=1` reproduce exactamente el comportamiento
+anterior, lo que mantiene válidos los checkpoints de los experimentos 15-22.
+
+### Resultado
+
+| métrica | k=1 | k=6 | efecto | p | folds a favor |
+|---|---|---|---|---|---|
+| ADE (modo más probable) | 2,988 | 3,285 | **+0,298** | 0,036 | **0/5** |
+| ADE móviles | — | — | **+0,303** | 0,036 | **0/5** |
+| FDE (modo más probable) | 6,433 | 6,937 | **+0,504** | 0,041 | 1/5 |
+| **minADE_6** | 2,988 | 2,264 | **−0,723 (−24 %)** | 0,005 | **5/5** |
+| **minFDE_6** | 6,433 | 4,479 | **−1,954 (−44 %)** | 0,006 | **5/5** |
+
+Las dos mitades de la tabla dicen cosas **opuestas**, y las dos son correctas.
+
+### El hallazgo que vale por sí solo
+
+**Reportar solo minADE/minFDE —que es lo que hace la literatura— habría mostrado
+una mejora del 24 % y 44 %, con p<0,01 y 5/5 folds, sobre un modelo cuya predicción
+real empeoró de forma significativa en 0/5 folds.**
+
+minADE_k toma el mejor de los K modos *sabiendo cuál fue el futuro real*. Es un
+oráculo: mide si entre las hipótesis hay una buena, no si el modelo sabe elegirla.
+Con K=1 coincide con el ADE; con K=6 se vuelve una métrica distinta, y compararla
+contra el ADE de un modelo unimodal —como se hace en la práctica— es comparar un
+oráculo contra una predicción.
+
+Esto es un resultado metodológico, del mismo orden que el `gate_init` del
+experimento 20: no cambia qué modelo es mejor, cambia qué números se pueden creer.
+**Toda métrica `min*` de este proyecto se reporta junto a la métrica del modo más
+probable, nunca sola.**
+
+### La causa, leída de las curvas
+
+De `work_dirs/multimodal/baseline_k6_f0s0.log`:
+
+| época | `wta_reg` | `wta_cls` |
+|---|---|---|
+| 1 | 0,1165 | 1,5961 |
+| 25 | **0,0149** | 1,2856 |
+| 50 | 0,0280 | 1,6908 |
+| 100 | 0,0365 | 1,4535 |
+
+Tres cosas a la vez:
+
+1. **`cls` es ~40× mayor que `reg`.** Con `cls_weight=1.0` el gradiente total lo
+   domina la clasificación.
+2. **La regresión empeora después de la época 25** (0,0149 → 0,0365): el modelo
+   *desaprende a predecir* mientras persigue clasificar.
+3. **El clasificador casi no aprende.** `cls` se queda en ~1,45 contra el 1,79 del
+   azar puro (log 6).
+
+El winner-takes-all **sí** especializa los modos —minADE_6 = 2,264 lo demuestra: las
+hipótesis buenas están ahí—. Pero al predecir se elige por `argmax` de los logits, y
+ese clasificador no distingue cuál sirve. **La brecha 3,285 vs 2,264 es exactamente
+el costo de elegir mal, no de predecir mal.**
+
+### El brazo que se canceló
+
+El diseño original tenía un segundo brazo `gate0_k6` (modelo completo con la escena,
+gate congelado en 0). Se **canceló** al terminar el baseline: eran 8,5 h de GPU para
+reproducir el mismo desbalance en un modelo 8× más caro, con el diagnóstico ya
+hecho. No hay números de `gate0_k6` — el CSV no los contiene y no deben citarse.
+
+### Lo que abre
+
+Si la brecha es de *selección* y no de *predicción*, bajar `cls_weight` debería
+recuperar la regresión. Barrido en `run_clsweight.sh` (0,01 / 0,05 / 0,2 × 2 folds
+× 4 semillas; el 1,0 ya medido entra de cuarto punto).
+
+**Es un barrido para elegir un hiperparámetro, no un resultado.** El peso que gane
+se valida después sobre los 5 folds completos: elegir y reportar sobre los mismos
+folds sería el error de la regla 2.
+
+Hipótesis alternativa si ningún peso alcanza: con 236 ventanas de entrenamiento
+repartidas en 6 modos, cada modo ve ~39 ejemplos. Sería otra vez el cuello de datos
+(experimento 21), no un problema de la pérdida.
