@@ -1,0 +1,5 @@
+/home/lcad/miniconda3/envs/sapiens_gpu/lib/python3.10/site-packages/mmengine/optim/optimizer/zero_optimizer.py:11: DeprecationWarning: `TorchScript` support for functional optimizers is deprecated and will be removed in a future PyTorch release. Consider using the `torch.compile` optimizer instead.
+PAREADO por imagen, 55 imágenes de 5 escenas retenidas, 4 máscaras
+  ép 50 vs ép400: +0.2301 ± 0.1557  t=+10.96  a favor de ép 50: 55/55
+  ép 50 vs ép 25: +0.0142 ± 0.0419  t= +2.51  a favor de ép 50: 30/55
+  ép 50 vs ép 75: +0.0272 ± 0.0279  t= +7.25  a favor de ép 50: 55/55

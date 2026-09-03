@@ -1549,3 +1549,96 @@ No falta información por muestra: **faltan muestras**. 236 ventanas de
 entrenamiento desde 8 escenas, y un encoder MAE pre-entrenado con 8. El
 experimento 21 ya había localizado la brecha del encoder en cruzar entre
 *escenas*. El siguiente paso no es otra variante de arquitectura.
+
+---
+
+## Experimento 23: la prueba de 10 sweeps de Claudine, medida bien
+
+**Fecha:** 2026-09-02 · **Config:** `configs/sapiens_mae/lidar/rect_overfit10_val.py`
+**Curva:** `curva_overfit10.py` · **CSV:** `work_dirs/rect_ov10_fino/curva_overfit10.csv`
+
+Peldaño **10 sweeps** de la escalera de Claudine (ítems 5 y 11 del checklist).
+No se cambió ni la arquitectura ni los datos: se arregló **cómo se mide**.
+
+### Tres cosas que estaban mal, todas verificadas
+
+**1. Train y evaluación estaban en dominios distintos.** `range_png_rect/train/`
+tenía las 10 imágenes en **2650×64** (filas nativas) mientras `val`, `unseen`,
+`train100` y los cinco `fold*_train` están en **2650×1024**. El pipeline reescala
+a 1024 con **bicubic**; `make_rect_png_scenes.py` escribe las de 1024 con
+**INTER_NEAREST**. El modelo entrenaba sobre gradientes suavizados y se evaluaba
+sobre bloques duros de 16 filas repetidas. Explica por qué el de 100 sweeps daba
+mejor (3,16): su `train100` ya estaba en 1024.
+
+**2. El config tomaría hoy 612 imágenes, no 10.** `data_root` apunta a la RAÍZ de
+`range_png_rect/` y `CustomDataset` recorre subdirectorios. El 28/06 ahí solo
+estaba `train/` (el log de la corrida original dice `[6000][5/5]` con
+`batch_size=2` = 10 imágenes, correcto). Después aparecieron `train100`, `val`,
+`unseen` y cinco `fold*_train`. Verificado construyendo el dataset: **612**, e
+incluiría `val/` y `unseen/` — fuga directa en el split de evaluación.
+
+**3. El retenido era n=1.** Una imagen en `val`, una en `unseen`. Se reemplazó por
+`ov10_val_intra` (2a81 sweep 9, el único sweep de la escena de train que el modelo
+no vio) y `ov10_val_escenas` (**5 escenas nunca vistas × 11 sweeps = 55 imágenes**).
+
+**Identificación de las 10 imágenes.** Comparando píxel a píxel contra los `.npy`
+de `range_files`: escena `2a81f5233075e987`, sweeps **{0,1,2,3,4,5,6,7,8,10}** —
+diferencia media 0,20 sobre 255. Falta el 9 porque el generador ordenó los `.npy`
+como **strings**: 0, 1, 10, 2, 3... El ítem 5 decía "10 sweeps de la escena 2a81",
+correcto, pero no son los sweeps 0-9.
+
+### La curva de generalización
+
+Antes no existía: el config original tenía `max_keep_ckpts=2` con `interval=500`,
+así que en disco quedaban solo `epoch_5500` y `epoch_6000`. Con `interval=25`:
+
+| época | train | val_intra | val_escenas |
+|---|---|---|---|
+| sin entrenar | 3,059 | 3,043 | 2,684 |
+| 25 | 0,719 | 0,805 | 1,848 |
+| **50** | 0,665 | 0,749 | **1,830** |
+| 75 | 0,642 | 0,719 | 1,853 |
+| 100 | 0,625 | 0,706 | 1,919 |
+| 250 | 0,564 | 0,646 | 1,991 |
+| 400 | 0,524 | 0,646 | 2,052 |
+
+**El óptimo está en la época 50 de 6000.** Pareado por imagen sobre las 55
+retenidas, 4 máscaras:
+
+```
+ép 50 vs ép 400:  +0,2301 ± 0,1557   t=+10,96   55/55 imágenes
+ép 50 vs ép  75:  +0,0272 ± 0,0279   t= +7,25   55/55 imágenes
+ép 50 vs ép  25:  +0,0142 ± 0,0419   t= +2,51   30/55 imágenes
+```
+
+O sea: **una meseta entre las épocas 25 y 50, con caída abrupta después.** La 50 no
+se distingue de la 25 (30/55 es cara o cruz) pero sí de la 75 y de la 400.
+
+### Resultado
+
+| medición | mejora sobre el modelo sin entrenar |
+|---|---|
+| ítem 11 del checklist (n=1, época 6000) | **+3,7 %** |
+| época 2000, retenido de 55 imágenes | +13,7 % |
+| **época 50, retenido de 55 imágenes** | **+31,8 %** |
+
+**El encoder de 10 sweeps es ~9× mejor de lo que el checklist le acreditaba.** No
+se mejoró el encoder: es el mismo, con los mismos datos. Lo que estaba mal era la
+medición — una imagen, la época equivocada, y otro dominio.
+
+### El hallazgo que vale por sí solo
+
+`val_intra` y `val_escenas` **van en direcciones opuestas**. El sweep retenido de la
+misma escena mejora hasta la época ~300 (0,805 → 0,640) mientras el retenido de
+otras escenas empeora desde la 50. El modelo sigue aprendiendo **su escena** y eso le
+cuesta la **transferencia entre escenas**.
+
+Es la misma estructura del experimento 21 en el encoder de vóxeles
+(0,069 → 0,117 → 0,191), ahora con la curva temporal que allá no teníamos.
+
+### Lo que abre
+
+Los cinco encoders de la CV de Fase 1 se entrenaron **1000 épocas sin
+`val_dataloader`** y se usó el **último** checkpoint. Si les pasa lo mismo, están
+en la zona degradada. Es comprobable barato: en disco quedaron las épocas **600 y
+800** además de la 1000, y `diagnostico_encoder_mae.py` ya sabe medirlo.

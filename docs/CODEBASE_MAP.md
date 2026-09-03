@@ -194,6 +194,7 @@ Las 75 configs se agrupan en familias generadas por scripts. Las vigentes:
 |---|---|---|
 | `f1cv_{mae,base,dec}_fold{0..4}` | la CV principal de 5 folds | `f1cv/mae_encoder_fold{F}.pth` (el de su propio fold) |
 | `noclip_{base,dec}_fold{0..4}` | sin recorte, escala fija 10 m — el protocolo vigente | `f1cv/mae_encoder_fold{F}.pth` |
+| `rect_overfit10_val` | la prueba de 10 sweeps de Claudine, instrumentada (exp. 23) | ninguno: es el MAE mismo |
 | `hist11_base_fold{0..4}` | baseline con `history_len=11` (1,1 s) — control del experimento 22 | **ninguno**: `BaselineTrajectoryModel` es puramente cinemático |
 | `geo_{mae,base,dec}_fold0` | objetivo geométrico + 7 ventanas | `geo/mae_encoder_fold0.pth` |
 | `rvcv_*` / `rvaug_*` | range-view fold 0, sin y con augmentación | `mae_encoder_rangeview.pth` |
@@ -242,6 +243,7 @@ byte a byte salvo el `work_dir`.
 | `run_noclip_cv.sh` | **la CV de los 5 folds** (0-4) en el protocolo vigente. Corrida y cerrada el 31/08 |
 | `run_gateinit.sh` | el control del **arranque del gate** (`gate_init=0.05`): 5 folds × 8 semillas, reusa los encoders de la CV |
 | `run_hist11.sh` | **la historia completa (1,1 s)**: baseline con `history_len=11` contra el de 5, 5 folds × 8 semillas. Re-evalúa `base5` porque la población cambia |
+| `curva_overfit10.py` | **la curva de generalización de la prueba de 10 sweeps**: recorre todos los checkpoints y mide la pérdida enmascarada en train / sweep retenido de la misma escena / 5 escenas nunca vistas, con máscaras pareadas. El producto es saber DÓNDE PARAR |
 | `diagnostico_encoder_mae.py` | **¿el encoder memorizó?** Pérdida de reconstrucción en 3 poblaciones (ventanas vistas / ventanas nuevas de escenas vistas / escenas retenidas) con máscaras pareadas, contra el modelo sin entrenar y contra predecir 0. No entrena |
 | `extract_mae_encoder.py` | renombra `backbone.*`→`encoder.*` entre pre-train y decoder |
 | `viz_un_auto.py` | trayectoria de un objeto, gate0 vs gated |
@@ -437,6 +439,27 @@ posteriores.**
     mete el suelo una capa de vóxeles más abajo que Waymo: misma caja, contenido
     desplazado 1,8 m, y el MAE aprendería una escena que no existe en el destino.
     Un diagnóstico de transferencia daría negativo por el marco, no por los datos.
+25. **Un MAE entrenado hasta el final es un MAE peor.** Medido en la prueba de 10
+    sweeps (exp. 23) con checkpoints cada 25 épocas: la reconstrucción en escenas
+    retenidas es **mejor en la época 50 y empeora monótonamente** — 1,830 en la 50
+    contra 2,052 en la 400, con 55/55 imágenes a favor de la 50. El config
+    entrenaba **6000 épocas**: 120× más de lo útil. Y no se veía porque
+    `max_keep_ckpts=2` borraba todo menos las dos últimas. **Ningún config de MAE
+    de este repo tiene `val_dataloader`** (ni la escalera ni `f1cv_mae_fold*`), así
+    que en todos se está usando el último checkpoint sin saber si es el mejor.
+26. **`val_intra` y `val_escenas` se mueven en direcciones OPUESTAS.** En la misma
+    curva, el sweep retenido de la escena de train mejora hasta la época ~300
+    (0,805 → 0,640) mientras las escenas nuevas empeoran desde la 50. Medir
+    "generalización" con un retenido de la misma escena da la respuesta contraria
+    a la correcta. Es la misma estructura del experimento 21 en vóxeles.
+27. **Los PNG de `range_png_rect/` no están todos en el mismo tamaño.**
+    `train/` está en **2650×64** y `val`, `unseen`, `train100` y `fold*_train` en
+    **2650×1024**. El pipeline reescala a 1024 con **bicubic** y el generador
+    escribe las de 1024 con **INTER_NEAREST**: entrenar con unas y evaluar con
+    otras compara dominios distintos. Además `config_rangeview_rect_overfit10.py`
+    apunta `data_root` a la RAÍZ, y como `CustomDataset` recorre subdirectorios,
+    hoy tomaría **612 imágenes incluyendo `val/` y `unseen/`** — fuga en el split
+    de evaluación. Correr `rect_overfit10_val.py` en su lugar.
 
 ---
 
@@ -571,9 +594,9 @@ disco**, y su resultado **todavía no es bueno**:
 
 | ítem del checklist | estado | evidencia |
 |---|---|---|
-| 5 — overfit 10 sweeps | ✅ | loss 2,72 → 0,055 |
-| 6 — overfit 100 sweeps | ⚠️ | loss 2,07 → 0,244, pero *"la generalización pica ~ép1000 y luego memoriza"* |
-| 11 — evaluar en no-visto | ⚠️ | sin entrenar 3,52 · 10 sw 3,39 · 100 sw **3,16** — 10× de datos por solo −6,8 % |
+| 5 — overfit 10 sweeps | ✅ | loss 2,72 → 0,052 (pero es pérdida de TRAIN: no dice nada de generalización) |
+| 6 — overfit 100 sweeps | ⚠️ | loss 2,07 → 0,244, y *"la generalización pica ~ép1000 y luego memoriza"* — el exp. 23 midió que con 10 sweeps pica en la **50** |
+| 11 — evaluar en no-visto | 🔄 | **rehecho en el exp. 23**: el 3,7 % era n=1 en la época 6000. Con 55 imágenes de 5 escenas y en la época 50: **+31,8 %** |
 | 7 — 1.000 sweeps | 🔒 | **bloqueado por la puerta**, no por los datos |
 | 10 — ≥50 mil sweeps | 🔒 | **bloqueado por la puerta** |
 
@@ -666,10 +689,11 @@ medir con `diagnostico_encoder_mae.py` la reconstrucción sobre las escenas
 La escalera pide un resultado bueno, no un experimento corrido. Lo que hoy lo hace
 malo, medido:
 
-- **El encoder memoriza y no generaliza bien** (ítem 6): a 100 sweeps la
-  generalización pica cerca de la época 1000 y después empeora. Un régimen de
-  entrenamiento que se detenga en el pico —o que regularice— es trabajo de este
-  peldaño, no del siguiente.
+- **Dónde parar: RESUELTO para 10 sweeps** (exp. 23, 02/09). El óptimo es una
+  meseta entre las épocas **25 y 50** de 6000, con caída abrupta después (55/55
+  imágenes a favor de la 50 contra la 75). Medido bien, el encoder de 10 sweeps
+  da **+31,8 %** sobre el no-entrenado, no el +3,7 % del ítem 11. Falta aplicar
+  el mismo criterio a **100 sweeps**, que es el peldaño siguiente.
 - **El retorno del escalado es flojo** (ítem 11): 10× de datos dio −6,8 %. Si esa
   curva no mejora, ir a 1000 compra poco, y es la razón misma por la que la puerta
   existe.
