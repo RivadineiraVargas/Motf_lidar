@@ -482,6 +482,15 @@ posteriores.**
     **empeoraba** 0,298 de ADE (0/5 folds, p=0,036). **Toda métrica `min*` se reporta
     junto a la del modo más probable, nunca sola.**
 
+29. **Un hiperparámetro elegido por barrido se valida en folds que NO participaron
+    de la elección.** Medido en el experimento 25: barrer `cls_weight` sobre 2 folds
+    dio un ganador que parecía sólido —único que le ganaba al k=1, **−7,6 % y
+    −8,1 %**, los dos folds de acuerdo—. En los folds 2, 3 y 4, retenidos, el efecto
+    **se dio vuelta**: +0,224, **0/3 folds**. No fue un número ruidoso y evidente;
+    tenía justo la consistencia que uno usa como señal de confianza. Lo que salvó la
+    conclusión fue fijar la partición **antes** de mirar los resultados. El número
+    que se reporta es el de los folds retenidos, nunca el del barrido.
+
 ---
 
 ## El hueco de reproducibilidad

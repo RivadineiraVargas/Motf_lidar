@@ -1781,3 +1781,90 @@ folds sería el error de la regla 2.
 Hipótesis alternativa si ningún peso alcanza: con 236 ventanas de entrenamiento
 repartidas en 6 modos, cada modo ve ~39 ejemplos. Sería otra vez el cuello de datos
 (experimento 21), no un problema de la pérdida.
+
+---
+
+## Experimento 25: `cls_weight` no salva la multimodalidad — y el barrido casi produce una conclusión falsa
+
+**Fecha:** 2026-09-03 · **Rama:** `decoder/multimodal-wta`
+**Scripts:** `run_clsweight.sh` (barrido) + `run_clsweight_val.sh` (validación)
+**CSV:** `work_dirs/clsweight/clsweight_results.csv`, `work_dirs/clsweight_val/clsweight_val_results.csv`
+El `baseline_k1` y el `cls_weight=1.0` se reusan de `work_dirs/multimodal/multimodal_results.csv`
+(mismo config `noclip_base_fold*.py`, mismas semillas, pareo por (fold, semilla)).
+
+### Por qué
+
+El experimento 24 dejó un diagnóstico: el winner-takes-all especializa los modos
+—minADE_6 lo prueba— pero el clasificador no sabe elegirlos, y `wta_cls` es ~40×
+mayor que `wta_reg`. La hipótesis era que `cls_weight=1.0` estaba mal calibrado y
+que bajarlo recuperaría la regresión.
+
+### El barrido
+
+3 pesos × 2 folds × 4 semillas. El `1.0` ya estaba medido y entra de cuarto punto.
+
+| `cls_weight` | efecto vs k=1 | folds a favor | n |
+|---|---|---|---|
+| 0,01 | +1,122 | 0/2 | 2 folds |
+| **0,05** | **−0,264** | **2/2** | 2 folds |
+| 0,2 | +0,020 | 0/2 | 2 folds |
+| 1,0 | +0,298 | 0/5 | 5 folds (exp. 24) |
+
+El 0,05 parecía sólido: único que le ganaba al k=1, y con un efecto relativo casi
+idéntico en los dos folds (**−7,6 %** y **−8,1 %**).
+
+**La hipótesis monótona era falsa.** La brecha ADE − minADE en el fold 0 va
+3,32 / 1,35 / 1,80 / 2,26 para 0,01 / 0,05 / 0,2 / 1,0: tiene un **mínimo**, no una
+pendiente. Con 0,01 el clasificador se queda sin gradiente y elige casi al azar
+entre modos muy especializados — peor que no tener modos.
+
+### La validación, y por qué se diseñó así
+
+Los folds 0 y 1 son donde se **eligió** el 0,05. Reportar ahí sería sesgo de
+selección. `run_clsweight_val.sh` corrió el 0,05 sobre los **folds 2, 3 y 4, que
+nunca participaron de la elección**, y completó las semillas 4-7 de los folds 0-1
+para poder publicar la tabla de 5 folds.
+
+**El test independiente no replica — da vuelta el signo:**
+
+| fold | efecto vs k=1 |
+|---|---|
+| 2 | +0,342 |
+| 3 | +0,214 |
+| 4 | +0,116 |
+| **entre folds (n=3)** | **+0,224 ± 0,113 · p=0,075 · 0/3 folds** |
+
+Tabla de 5 folds (folds 0-1 **sesgados** por la elección): +0,069 ± 0,250, p=0,57,
+2/5 folds. Con las 8 semillas, la ventaja del fold 1 se encogió de −0,184 a −0,014.
+
+### Lo que se concluye
+
+**Ningún `cls_weight` probado mejora la predicción real.** El 0,05 es, en el mejor
+de los casos, indistinguible del k=1; en los folds retenidos es peor.
+
+La multimodalidad con winner-takes-all **no aporta en este peldaño**. La explicación
+más probable no es la pérdida sino los datos: 236 ventanas de entrenamiento
+repartidas en 6 modos dan ~39 ejemplos por modo. Es el mismo cuello del
+experimento 21.
+
+### El hallazgo del exp. 24 se refuerza
+
+minADE_6 con `cls_weight=0,05`, sobre los 5 folds: **−0,858 (−29 %), p=0,003,
+5/5 folds** — mientras el ADE real no mejora (2/5 folds, p=0,57). El mismo patrón
+que en el 24 con `cls_weight=1,0`, ahora en **folds independientes y con otro
+hiperparámetro**. Ya no es un accidente de un peso: es cómo se comporta el WTA acá.
+
+### El segundo hallazgo, metodológico
+
+**Elegir el mejor de 3 pesos sobre 2 folds fabricó un efecto que parecía sólido y
+que se dio vuelta en los folds retenidos.** No fue un número ruidoso y evidente: era
+−7,6 % y −8,1 %, dos folds de acuerdo, con la consistencia que uno usa como señal de
+confianza. Pasó a +0,224 y 0/3 folds.
+
+Es la regla 2 en acción, y esta vez el diseño lo atrapó **antes** de que llegara a
+ninguna conclusión — a diferencia de las once retractaciones anteriores. Lo que lo
+hizo posible fue decidir la partición **antes** de mirar: los folds de validación se
+fijaron al escribir el barrido, no después de ver el resultado.
+
+**Regla que queda:** todo hiperparámetro elegido por barrido se valida en folds que
+no participaron de la elección, y el número que se reporta es el de esos folds.
