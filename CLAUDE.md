@@ -48,7 +48,10 @@ bueno**: a 100 sweeps el encoder pica cerca de la época 1000 y después memoriz
 10× de datos dieron solo −6,8 %. **El trabajo es mejorar ahí**, no escalar — ver
 "La ruta" en el mapa, que arranca con la puerta.
 
-Ver [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) para la arquitectura, el flujo de
+Ver **[docs/RESULTADOS_VALIDADOS.md](docs/RESULTADOS_VALIDADOS.md)** para los
+resultados que se pueden defender, cada uno con su n, su CSV y su commit — es lo
+que hay que abrir antes de citar cualquier número. Ver
+[docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) para la arquitectura, el flujo de
 datos, las 24 trampas, la guía de navegación y **la ruta**. Ver
 `docs/EXPERIMENTOS_DECODER.md` para los 22 experimentos con sus números y comandos
 de reproducción.
