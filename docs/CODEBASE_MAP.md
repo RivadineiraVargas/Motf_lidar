@@ -439,14 +439,25 @@ posteriores.**
     mete el suelo una capa de vóxeles más abajo que Waymo: misma caja, contenido
     desplazado 1,8 m, y el MAE aprendería una escena que no existe en el destino.
     Un diagnóstico de transferencia daría negativo por el marco, no por los datos.
-25. **Un MAE entrenado hasta el final es un MAE peor.** Medido en la prueba de 10
-    sweeps (exp. 23) con checkpoints cada 25 épocas: la reconstrucción en escenas
-    retenidas es **mejor en la época 50 y empeora monótonamente** — 1,830 en la 50
-    contra 2,052 en la 400, con 55/55 imágenes a favor de la 50. El config
-    entrenaba **6000 épocas**: 120× más de lo útil. Y no se veía porque
-    `max_keep_ckpts=2` borraba todo menos las dos últimas. **Ningún config de MAE
-    de este repo tiene `val_dataloader`** (ni la escalera ni `f1cv_mae_fold*`), así
-    que en todos se está usando el último checkpoint sin saber si es el mejor.
+25. **En range-view, un MAE entrenado hasta el final es un MAE peor. En vóxeles,
+    NO está demostrado.** En la prueba de 10 sweeps (exp. 23, range-view) con
+    checkpoints cada 25 épocas, la reconstrucción en escenas retenidas es **mejor
+    en la época 50 y empeora monótonamente** — 1,830 en la 50 contra 2,052 en la
+    400, con 55/55 imágenes a favor de la 50. El config entrenaba **6000 épocas**:
+    120× más de lo útil, y no se veía porque `max_keep_ckpts=2` borraba todo menos
+    las dos últimas.
+    **Pero los cinco encoders de vóxeles de Fase 1 NO muestran esa caída**
+    (medido el 02/09 en sus épocas 600/800/1000: medias 0,1894 / 0,1883 / 0,1867;
+    ép600 vs ép1000 da t=−0,43 con 2/5 folds). Los ADE de los experimentos 19-22
+    **no están comprometidos por sobreentrenamiento del encoder**.
+    **El límite de esa comprobación:** solo existen las épocas 600, 800 y 1000, o
+    sea el último 40 %. En range-view el óptimo estaba al **0,8 %** de la corrida
+    (época 50 de 6000); el equivalente acá seria la época ~8. Una meseta baja
+    posterior a la caída se veria exactamente igual de plana. Distinguirlo cuesta
+    re-pre-entrenar con checkpoints cada 25 épocas: 18,5 min por fold, ~1,6 h.
+    Lo que sí vale para todos: **ningún config de MAE de este repo tiene
+    `val_dataloader`** (ni la escalera ni `f1cv_mae_fold*`), así que en todos se
+    usa el último checkpoint sin saber si es el mejor.
 26. **`val_intra` y `val_escenas` se mueven en direcciones OPUESTAS.** En la misma
     curva, el sweep retenido de la escena de train mejora hasta la época ~300
     (0,805 → 0,640) mientras las escenas nuevas empeoran desde la 50. Medir

@@ -1,0 +1,127 @@
+######## ENCODERS DE FASE 1 — epoch_600.pth ########
+######## FOLD 0 — train 8 escenas · val ['7e2f727866c69ea0', '82f90331a1dfe968']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0932 ± 0.0235 (n=8)  0.9525 ± 0.0623 (n=8)  0.3408 ± 0.0415 (n=8)
+  train_nuevas   0.1144 ± 0.0377 (n=48) 0.9405 ± 0.0665 (n=48) 0.3355 ± 0.0423 (n=48)
+  val            0.1937 ± 0.0524 (n=14) 0.9740 ± 0.0352 (n=14) 0.3470 ± 0.0195 (n=14)
+######## FOLD 1 — train 8 escenas · val ['2a81f5233075e987', '4014ae5bcda2726f']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0653 ± 0.0397 (n=8)  0.9393 ± 0.0475 (n=8)  0.3316 ± 0.0335 (n=8)
+  train_nuevas   0.1025 ± 0.0367 (n=48) 0.9314 ± 0.0570 (n=48) 0.3278 ± 0.0357 (n=48)
+  val            0.2591 ± 0.0185 (n=14) 1.0125 ± 0.0418 (n=14) 0.3788 ± 0.0218 (n=14)
+######## FOLD 2 — train 8 escenas · val ['2e41fe6faf5cd2ea', '41692b0ec7ff4123']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.1140 ± 0.0289 (n=8)  0.9563 ± 0.0619 (n=8)  0.3433 ± 0.0418 (n=8)
+  train_nuevas   0.1295 ± 0.0270 (n=48) 0.9525 ± 0.0693 (n=48) 0.3407 ± 0.0430 (n=48)
+  val            0.1356 ± 0.0320 (n=14) 0.9307 ± 0.0200 (n=14) 0.3280 ± 0.0096 (n=14)
+######## FOLD 3 — train 8 escenas · val ['367b072edc9822ea', '4a2ef30000d19d90']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0629 ± 0.0304 (n=8)  0.9678 ± 0.0526 (n=8)  0.3507 ± 0.0350 (n=8)
+  train_nuevas   0.1040 ± 0.0324 (n=48) 0.9697 ± 0.0492 (n=48) 0.3514 ± 0.0313 (n=48)
+  val            0.1726 ± 0.0541 (n=14) 0.8651 ± 0.0254 (n=14) 0.2870 ± 0.0105 (n=14)
+######## FOLD 4 — train 8 escenas · val ['394e61f27c2a1700', '4b60f9400a30ceaf']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0889 ± 0.0221 (n=8)  0.9511 ± 0.0507 (n=8)  0.3378 ± 0.0332 (n=8)
+  train_nuevas   0.1072 ± 0.0301 (n=48) 0.9447 ± 0.0656 (n=48) 0.3348 ± 0.0380 (n=48)
+  val            0.1860 ± 0.0760 (n=14) 0.9605 ± 0.0559 (n=14) 0.3514 ± 0.0429 (n=14)
+=== RESUMEN (media de la pérdida por población, modelo entrenado) ===
+0             0.0932        0.1144        0.1937
+1             0.0653        0.1025        0.2591
+2             0.1140        0.1295        0.1356
+3             0.0629        0.1040        0.1726
+4             0.0889        0.1072        0.1860
+######## ENCODERS DE FASE 1 — epoch_800.pth ########
+######## FOLD 0 — train 8 escenas · val ['7e2f727866c69ea0', '82f90331a1dfe968']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0954 ± 0.0245 (n=8)  0.9525 ± 0.0623 (n=8)  0.3408 ± 0.0415 (n=8)
+  train_nuevas   0.1097 ± 0.0344 (n=48) 0.9405 ± 0.0665 (n=48) 0.3355 ± 0.0423 (n=48)
+  val            0.1902 ± 0.0399 (n=14) 0.9740 ± 0.0352 (n=14) 0.3470 ± 0.0195 (n=14)
+######## FOLD 1 — train 8 escenas · val ['2a81f5233075e987', '4014ae5bcda2726f']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0714 ± 0.0476 (n=8)  0.9393 ± 0.0475 (n=8)  0.3316 ± 0.0335 (n=8)
+  train_nuevas   0.1095 ± 0.0375 (n=48) 0.9314 ± 0.0570 (n=48) 0.3278 ± 0.0357 (n=48)
+  val            0.2592 ± 0.0137 (n=14) 1.0125 ± 0.0418 (n=14) 0.3788 ± 0.0218 (n=14)
+######## FOLD 2 — train 8 escenas · val ['2e41fe6faf5cd2ea', '41692b0ec7ff4123']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.1121 ± 0.0321 (n=8)  0.9563 ± 0.0619 (n=8)  0.3433 ± 0.0418 (n=8)
+  train_nuevas   0.1319 ± 0.0301 (n=48) 0.9525 ± 0.0693 (n=48) 0.3407 ± 0.0430 (n=48)
+  val            0.1313 ± 0.0131 (n=14) 0.9307 ± 0.0200 (n=14) 0.3280 ± 0.0096 (n=14)
+######## FOLD 3 — train 8 escenas · val ['367b072edc9822ea', '4a2ef30000d19d90']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0475 ± 0.0207 (n=8)  0.9678 ± 0.0526 (n=8)  0.3507 ± 0.0350 (n=8)
+  train_nuevas   0.1148 ± 0.0421 (n=48) 0.9697 ± 0.0492 (n=48) 0.3514 ± 0.0313 (n=48)
+  val            0.1632 ± 0.0388 (n=14) 0.8651 ± 0.0254 (n=14) 0.2870 ± 0.0105 (n=14)
+######## FOLD 4 — train 8 escenas · val ['394e61f27c2a1700', '4b60f9400a30ceaf']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0724 ± 0.0141 (n=8)  0.9511 ± 0.0507 (n=8)  0.3378 ± 0.0332 (n=8)
+  train_nuevas   0.1165 ± 0.0321 (n=48) 0.9447 ± 0.0656 (n=48) 0.3348 ± 0.0380 (n=48)
+  val            0.1978 ± 0.0822 (n=14) 0.9605 ± 0.0559 (n=14) 0.3514 ± 0.0429 (n=14)
+=== RESUMEN (media de la pérdida por población, modelo entrenado) ===
+0             0.0954        0.1097        0.1902
+1             0.0714        0.1095        0.2592
+2             0.1121        0.1319        0.1313
+3             0.0475        0.1148        0.1632
+4             0.0724        0.1165        0.1978
+######## ENCODERS DE FASE 1 — epoch_1000.pth ########
+######## FOLD 0 — train 8 escenas · val ['7e2f727866c69ea0', '82f90331a1dfe968']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0918 ± 0.0236 (n=8)  0.9525 ± 0.0623 (n=8)  0.3408 ± 0.0415 (n=8)
+  train_nuevas   0.1138 ± 0.0372 (n=48) 0.9405 ± 0.0665 (n=48) 0.3355 ± 0.0423 (n=48)
+  val            0.1939 ± 0.0430 (n=14) 0.9740 ± 0.0352 (n=14) 0.3470 ± 0.0195 (n=14)
+######## FOLD 1 — train 8 escenas · val ['2a81f5233075e987', '4014ae5bcda2726f']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0670 ± 0.0404 (n=8)  0.9393 ± 0.0475 (n=8)  0.3316 ± 0.0335 (n=8)
+  train_nuevas   0.1048 ± 0.0360 (n=48) 0.9314 ± 0.0570 (n=48) 0.3278 ± 0.0357 (n=48)
+  val            0.2445 ± 0.0119 (n=14) 1.0125 ± 0.0418 (n=14) 0.3788 ± 0.0218 (n=14)
+######## FOLD 2 — train 8 escenas · val ['2e41fe6faf5cd2ea', '41692b0ec7ff4123']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0861 ± 0.0284 (n=8)  0.9563 ± 0.0619 (n=8)  0.3433 ± 0.0418 (n=8)
+  train_nuevas   0.1204 ± 0.0354 (n=48) 0.9525 ± 0.0693 (n=48) 0.3407 ± 0.0430 (n=48)
+  val            0.1261 ± 0.0221 (n=14) 0.9307 ± 0.0200 (n=14) 0.3280 ± 0.0096 (n=14)
+######## FOLD 3 — train 8 escenas · val ['367b072edc9822ea', '4a2ef30000d19d90']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0339 ± 0.0202 (n=8)  0.9678 ± 0.0526 (n=8)  0.3507 ± 0.0350 (n=8)
+  train_nuevas   0.1167 ± 0.0552 (n=48) 0.9697 ± 0.0492 (n=48) 0.3514 ± 0.0313 (n=48)
+  val            0.1632 ± 0.0391 (n=14) 0.8651 ± 0.0254 (n=14) 0.2870 ± 0.0105 (n=14)
+######## FOLD 4 — train 8 escenas · val ['394e61f27c2a1700', '4b60f9400a30ceaf']
+  train_vistas    8 ventanas
+  train_nuevas   48 ventanas
+  val            14 ventanas
+  train_vistas   0.0601 ± 0.0126 (n=8)  0.9511 ± 0.0507 (n=8)  0.3378 ± 0.0332 (n=8)
+  train_nuevas   0.1178 ± 0.0336 (n=48) 0.9447 ± 0.0656 (n=48) 0.3348 ± 0.0380 (n=48)
+  val            0.2060 ± 0.0757 (n=14) 0.9605 ± 0.0559 (n=14) 0.3514 ± 0.0429 (n=14)
+=== RESUMEN (media de la pérdida por población, modelo entrenado) ===
+0             0.0918        0.1138        0.1939
+1             0.0670        0.1048        0.2445
+2             0.0861        0.1204        0.1261
+3             0.0339        0.1167        0.1632
+4             0.0601        0.1178        0.2060
+=== LAS TRES ÉPOCAS LISTAS ===

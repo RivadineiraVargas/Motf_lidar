@@ -1642,3 +1642,36 @@ Los cinco encoders de la CV de Fase 1 se entrenaron **1000 épocas sin
 `val_dataloader`** y se usó el **último** checkpoint. Si les pasa lo mismo, están
 en la zona degradada. Es comprobable barato: en disco quedaron las épocas **600 y
 800** además de la 1000, y `diagnostico_encoder_mae.py` ya sabe medirlo.
+
+### Adenda al 23: ¿les pasa lo mismo a los encoders de Fase 1? No.
+
+La curva de range-view abrió la sospecha de que los cinco encoders de vóxeles de la
+CV —entrenados 1000 épocas sin `val_dataloader`, usando el último checkpoint—
+estuvieran degradados. Medido con `diagnostico_encoder_mae.py --epoch epoch_{600,800,1000}.pth`,
+reconstrucción en las escenas RETENIDAS de cada fold:
+
+| fold | ép 600 | ép 800 | ép 1000 |
+|---|---|---|---|
+| 0 | 0,1937 | 0,1902 | 0,1939 |
+| 1 | 0,2591 | 0,2592 | **0,2445** |
+| 2 | 0,1356 | 0,1313 | **0,1261** |
+| 3 | 0,1726 | 0,1632 | 0,1632 |
+| 4 | **0,1860** | 0,1978 | 0,2060 |
+| **media** | 0,1894 | 0,1883 | **0,1867** |
+
+```
+ép600 vs ép1000:  -0,0027 ± 0,0138   t=-0,43   2/5 folds
+ép800 vs ép1000:  -0,0016 ± 0,0088   t=-0,41   2/5 folds
+```
+
+**No hay degradación**, y si algo la última época es marginalmente la mejor.
+**Los ADE de los experimentos 19-22 no están comprometidos por esto.**
+
+**Lo que esta comprobación NO prueba.** Solo existen los checkpoints de las épocas
+600, 800 y 1000 — el último 40 % del entrenamiento. En range-view el óptimo estaba
+en la época 50 de 6000, o sea al 0,8 % de la corrida; el equivalente acá sería la
+época ~8. Si el pico fuera igual de temprano, las tres mediciones caerían todas
+después de la caída y una meseta baja se vería exactamente así de plana. Lo medido
+es *"¿se degrada en el último 40 %?"* (no), no *"¿es la 1000 la mejor época?"*
+(abierto). Distinguirlo cuesta ~1,6 h de re-pre-entrenamiento con checkpoints cada
+25 épocas.
