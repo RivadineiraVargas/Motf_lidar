@@ -57,3 +57,28 @@ sapiens/pretrain/bev_trajectories_*.png
 sapiens/pretrain/Motf_lidar/
 sapiens/pretrain/trajectory.txt
 predictions_global_*.txt
+
+# --- Datasets extraidos (02/09/2026) ---
+# waymo_clean/ son 275 sweeps + etiquetas; waymo_clean_view/ su copia en grilla
+# exacta 64x2650 para el visor; waymo_raw/ los .tfrecord originales. Se
+# regeneran con utilities/save_point_cloud_data_fixed.py desde el bucket
+# (ver "La ruta" en docs/CODEBASE_MAP.md). Demasiado grandes para git.
+waymo_clean/
+waymo_clean_val/
+waymo_clean_view/
+waymo_raw/
+waymo_clean_10.zip
+
+# Repo del colega (Gabriel Hendrix), 236 MB. Referencia externa, no es codigo
+# de este proyecto; su metodologia esta resumida en docs/SESION_ENCODER_VALIDACAO.md
+lidar_hendrix/
+lidar_hendrix.zip
+
+# Material de presentacion (video, audio, pptx) — 19 MB de binarios que no
+# aportan a la reproducibilidad del codigo
+explicacion/
+
+# Documentos personales que quedaron en la raiz por accidente
+Projeto_Pos_Doutorado_*.pdf
+Propostas_Trabalhos.pdf
+ejemplo colega.jpeg
