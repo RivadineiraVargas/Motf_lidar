@@ -472,6 +472,63 @@ posteriores.**
     hoy tomaría **612 imágenes incluyendo `val/` y `unseen/`** — fuga en el split
     de evaluación. Correr `rect_overfit10_val.py` en su lugar.
 
+28. **`minADE_k` / `minFDE_k` son un ORÁCULO, no una predicción.** Toman el mejor de
+    los K modos *sabiendo cuál fue el futuro real*: miden si entre las hipótesis hay
+    una buena, no si el modelo sabe elegirla. Con K=1 coinciden con ADE/FDE; con K>1
+    son una métrica distinta, y compararlas contra el ADE de un modelo unimodal —que
+    es lo que hace la literatura— es comparar un oráculo contra una predicción.
+    Medido en el experimento 24 sobre 5 folds × 8 semillas: el k=6 mejoró minADE un
+    **24 %** y minFDE un **44 %** (5/5 folds, p<0,01) mientras su predicción real
+    **empeoraba** 0,298 de ADE (0/5 folds, p=0,036). **Toda métrica `min*` se reporta
+    junto a la del modo más probable, nunca sola.**
+
+29. **Un hiperparámetro elegido por barrido se valida en folds que NO participaron
+    de la elección.** Medido en el experimento 25: barrer `cls_weight` sobre 2 folds
+    dio un ganador que parecía sólido —único que le ganaba al k=1, **−7,6 % y
+    −8,1 %**, los dos folds de acuerdo—. En los folds 2, 3 y 4, retenidos, el efecto
+    **se dio vuelta**: +0,224, **0/3 folds**. No fue un número ruidoso y evidente;
+    tenía justo la consistencia que uno usa como señal de confianza. Lo que salvó la
+    conclusión fue fijar la partición **antes** de mirar los resultados. El número
+    que se reporta es el de los folds retenidos, nunca el del barrido.
+
+    **Segunda forma, misma trampa:** tomar la mejor época de una curva de
+    checkpoints. En el experimento 26 las "mejores épocas" de los cinco folds
+    salieron **530, 450, 960, 30 y 100**, y en el fold 0 el mínimo cae a −2,69 sd
+    de los 91 checkpoints —justo el extremo que produce el mejor de 91 sorteos con
+    sd 0,0052—. La lectura correcta promedia el ruido en ventanas gruesas.
+
+30. **La reconstrucción del MAE no predice el ADE: medida en el experimento 27,
+    r=+0,34 sobre 5 folds.** El fold con la MAYOR ventaja de reconstrucción
+    (−24,4 %) dio +2,3 % de efecto en ADE —cero—, y el fold con ventaja NULA
+    (−0,4 %) dio +32,6 %. Dos encoders que reconstruyen igual producen decoders
+    que difieren hasta un 33 % en ADE: ese es el piso de ruido, y el pareo por
+    semilla no lo toca (cancela el 87 % del ruido de semilla, nada del de
+    identidad del encoder). Medido con `use_gate=False`, la condición MÁS
+    favorable a que el encoder importe. **Los diagnósticos de reconstrucción de
+    los exp. 17, 21, 23 y 26 son válidos como mediciones de reconstrucción, pero
+    no autorizan conclusiones sobre ADE** — y en varios lugares se los usó como si
+    lo hicieran.
+
+31. **La caja de vóxeles estaba centrada en el EGO, y el objeto casi nunca estaba
+    dentro.** Medido sobre las 236 ventanas del fold 0 con `spatial_range=±10 m`:
+    el objeto está a **32,7 m** del ego (mediana) y solo el **11,0 %** de las
+    ventanas lo tienen dentro de la caja durante toda su historia (el futuro
+    completo, 7,2 %). O sea que en el 89 % de los casos el encoder miraba una
+    región que NO CONTENÍA al objeto a predecir. Explica de una sola vez los exp.
+    19-20, 19, 22 y 27. `centrar_en_objeto=True` (exp. 28) lo lleva al 100 % y
+    mejora **−0,290, p=0,047, 5/5 folds** — pero el gate sigue cerrando a ~0,003,
+    así que la escena pasó de perjudicar a neutra, no a aportar. **Todo resultado
+    de Fase 1 anterior al 04/09 se midió con la caja ego-céntrica.**
+
+32. **La escena que entra son 1.500 bits.** 300 vóxeles × 5 frames de ocupación
+    **binaria**, con vóxeles de 2 m: un auto ocupa 2,2×1 y **un peatón 0,4×0,4 —
+    menos de un vóxel**. Se comprimen ~6.345 puntos LiDAR a 1.500 bits (4 puntos
+    por bit) descartando intensidad, densidad y altura fina. Del otro lado, los 300
+    tokens de 1024 dims se reducen con **una sola query** de cross-attention a **64
+    dims**. De los tres eslabones —representación, encoder, consumo—, el encoder es
+    el único medido y funciona (exp. 21); los otros dos no se tocaron en 28
+    experimentos.
+
 ---
 
 ## El hueco de reproducibilidad

@@ -24,8 +24,32 @@ class TrajectoryDataset(BaseDataset):
                  eval_windows=1,
                  clip_norm=5.0,
                  norm_scale=None,
+                 centrar_en_objeto=False,
                  **kwargs):
         self.clip_norm = clip_norm
+        # centrar_en_objeto: traslada la nube por -centers[0] ANTES de voxelizar,
+        # de modo que la caja de vóxeles quede centrada en el OBJETO a predecir y
+        # no en el ego.
+        #
+        # POR QUE EXISTE. Medido sobre las 236 ventanas del fold 0 con la caja
+        # ±10 m del config de Fase 1: el objeto está a 32,7 m del ego (mediana) y
+        # solo el 11 % de las ventanas lo tienen dentro de la caja durante toda su
+        # historia (el futuro completo, 7,2 %). O sea que en el 89 % de los casos
+        # el encoder mira una región que NO CONTIENE al objeto que hay que
+        # predecir. Es la explicación unificada de los exp. 19-20 (la escena no
+        # aporta, el gate cierra a 0,004), 22 (más historia no ayuda) y 27 (la
+        # reconstrucción no predice el ADE).
+        #
+        # ARREGLA TAMBIEN LA AUGMENTACION. _augment rota `relative` alrededor del
+        # objeto y la grilla con np.rot90, o sea alrededor del CENTRO DE LA
+        # GRILLA. Con la grilla centrada en el ego esos son dos puntos distintos y
+        # la rotación es geométricamente incoherente, pese a que el comentario de
+        # _augment dice "aplicada consistentemente". Centrando en el objeto, los
+        # dos giros comparten centro y la augmentación pasa a ser correcta.
+        #
+        # DEFAULT False A PROPOSITO: los experimentos 15-27 se midieron con la
+        # caja ego-céntrica y tienen que seguir reproduciéndose exactamente.
+        self.centrar_en_objeto = centrar_en_objeto
         self.norm_scale = norm_scale
         self.eval_windows = eval_windows   # antes de super(): full_init() ya llama load_data_list
         self.sequence_len = sequence_len
@@ -305,6 +329,14 @@ class TrajectoryDataset(BaseDataset):
         t0 = item.get('frame0', item.get('t_start', 0))
         for i in range(t0, t0 + self.history_len):
             points = self.load_bin(os.path.join(scene_bin, f"{i}.bin"))
+            if self.centrar_en_objeto:
+                # ref_center es la posición del objeto en el PRIMER frame de la
+                # ventana, el mismo origen contra el que se mide `relative`. Se
+                # traslada la nube entera, no la caja, para no tocar
+                # point_cloud_to_voxel_grid ni el resto del pipeline.
+                # Solo XYZ: la 4ª columna es intensidad.
+                points = points.copy()
+                points[:, :3] -= ref_center
             grid   = self.point_cloud_to_voxel_grid(points)
             voxel_sequences.append(grid)
 

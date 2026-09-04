@@ -1675,3 +1675,547 @@ después de la caída y una meseta baja se vería exactamente así de plana. Lo 
 es *"¿se degrada en el último 40 %?"* (no), no *"¿es la 1000 la mejor época?"*
 (abierto). Distinguirlo cuesta ~1,6 h de re-pre-entrenamiento con checkpoints cada
 25 épocas.
+
+---
+
+## Experimento 24: multimodal k=6 — la métrica de la literatura mejora 44 % mientras la predicción empeora
+
+**Fecha:** 2026-09-03 · **Rama:** `decoder/multimodal-wta`
+**Script:** `run_multimodal.sh` · **CSV:** `work_dirs/multimodal/multimodal_results.csv`
+**n = 5 folds × 8 semillas × 2 escenas de validación** (160 filas, comparación
+pareada por (fold, semilla); el test entre folds usa **n = 5**, no 40).
+
+Reproducir:
+
+```bash
+python agregar_resultados.py work_dirs/multimodal/multimodal_results.csv \
+    --comparar baseline_k6:baseline_k1 --por-fold                 # ADE real
+python agregar_resultados.py work_dirs/multimodal/multimodal_results.csv \
+    --comparar baseline_k6:baseline_k1 --metrica minade --por-fold  # minADE_6
+```
+
+### Por qué
+
+Wayformer y MTR no predicen **una** trayectoria sino **K hipótesis**, entrenadas con
+pérdida *winner-takes-all* (solo el modo más cercano al futuro real recibe gradiente
+de regresión) y una cabeza de clasificación que aprende a puntuarlas. Es una de las
+tres brechas metodológicas identificadas frente a esos papers. Se implementó en
+`trajectory_model_attn.py` y `baseline_model.py` con `num_modes=K` y `cls_weight`.
+
+Se midió sobre el **baseline cinemático**, no sobre el modelo con escena: la
+arquitectura grande tarda 8× por corrida, y la pregunta —¿sirve la multimodalidad?—
+no depende de la escena. `num_modes=1` reproduce exactamente el comportamiento
+anterior, lo que mantiene válidos los checkpoints de los experimentos 15-22.
+
+### Resultado
+
+| métrica | k=1 | k=6 | efecto | p | folds a favor |
+|---|---|---|---|---|---|
+| ADE (modo más probable) | 2,988 | 3,285 | **+0,298** | 0,036 | **0/5** |
+| ADE móviles | — | — | **+0,303** | 0,036 | **0/5** |
+| FDE (modo más probable) | 6,433 | 6,937 | **+0,504** | 0,041 | 1/5 |
+| **minADE_6** | 2,988 | 2,264 | **−0,723 (−24 %)** | 0,005 | **5/5** |
+| **minFDE_6** | 6,433 | 4,479 | **−1,954 (−44 %)** | 0,006 | **5/5** |
+
+Las dos mitades de la tabla dicen cosas **opuestas**, y las dos son correctas.
+
+### El hallazgo que vale por sí solo
+
+**Reportar solo minADE/minFDE —que es lo que hace la literatura— habría mostrado
+una mejora del 24 % y 44 %, con p<0,01 y 5/5 folds, sobre un modelo cuya predicción
+real empeoró de forma significativa en 0/5 folds.**
+
+minADE_k toma el mejor de los K modos *sabiendo cuál fue el futuro real*. Es un
+oráculo: mide si entre las hipótesis hay una buena, no si el modelo sabe elegirla.
+Con K=1 coincide con el ADE; con K=6 se vuelve una métrica distinta, y compararla
+contra el ADE de un modelo unimodal —como se hace en la práctica— es comparar un
+oráculo contra una predicción.
+
+Esto es un resultado metodológico, del mismo orden que el `gate_init` del
+experimento 20: no cambia qué modelo es mejor, cambia qué números se pueden creer.
+**Toda métrica `min*` de este proyecto se reporta junto a la métrica del modo más
+probable, nunca sola.**
+
+### La causa, leída de las curvas
+
+De `work_dirs/multimodal/baseline_k6_f0s0.log`:
+
+| época | `wta_reg` | `wta_cls` |
+|---|---|---|
+| 1 | 0,1165 | 1,5961 |
+| 25 | **0,0149** | 1,2856 |
+| 50 | 0,0280 | 1,6908 |
+| 100 | 0,0365 | 1,4535 |
+
+Tres cosas a la vez:
+
+1. **`cls` es ~40× mayor que `reg`.** Con `cls_weight=1.0` el gradiente total lo
+   domina la clasificación.
+2. **La regresión empeora después de la época 25** (0,0149 → 0,0365): el modelo
+   *desaprende a predecir* mientras persigue clasificar.
+3. **El clasificador casi no aprende.** `cls` se queda en ~1,45 contra el 1,79 del
+   azar puro (log 6).
+
+El winner-takes-all **sí** especializa los modos —minADE_6 = 2,264 lo demuestra: las
+hipótesis buenas están ahí—. Pero al predecir se elige por `argmax` de los logits, y
+ese clasificador no distingue cuál sirve. **La brecha 3,285 vs 2,264 es exactamente
+el costo de elegir mal, no de predecir mal.**
+
+### El brazo que se canceló
+
+El diseño original tenía un segundo brazo `gate0_k6` (modelo completo con la escena,
+gate congelado en 0). Se **canceló** al terminar el baseline: eran 8,5 h de GPU para
+reproducir el mismo desbalance en un modelo 8× más caro, con el diagnóstico ya
+hecho. No hay números de `gate0_k6` — el CSV no los contiene y no deben citarse.
+
+### Lo que abre
+
+Si la brecha es de *selección* y no de *predicción*, bajar `cls_weight` debería
+recuperar la regresión. Barrido en `run_clsweight.sh` (0,01 / 0,05 / 0,2 × 2 folds
+× 4 semillas; el 1,0 ya medido entra de cuarto punto).
+
+**Es un barrido para elegir un hiperparámetro, no un resultado.** El peso que gane
+se valida después sobre los 5 folds completos: elegir y reportar sobre los mismos
+folds sería el error de la regla 2.
+
+Hipótesis alternativa si ningún peso alcanza: con 236 ventanas de entrenamiento
+repartidas en 6 modos, cada modo ve ~39 ejemplos. Sería otra vez el cuello de datos
+(experimento 21), no un problema de la pérdida.
+
+---
+
+## Experimento 25: `cls_weight` no salva la multimodalidad — y el barrido casi produce una conclusión falsa
+
+**Fecha:** 2026-09-03 · **Rama:** `decoder/multimodal-wta`
+**Scripts:** `run_clsweight.sh` (barrido) + `run_clsweight_val.sh` (validación)
+**CSV:** `work_dirs/clsweight/clsweight_results.csv`, `work_dirs/clsweight_val/clsweight_val_results.csv`
+El `baseline_k1` y el `cls_weight=1.0` se reusan de `work_dirs/multimodal/multimodal_results.csv`
+(mismo config `noclip_base_fold*.py`, mismas semillas, pareo por (fold, semilla)).
+
+### Por qué
+
+El experimento 24 dejó un diagnóstico: el winner-takes-all especializa los modos
+—minADE_6 lo prueba— pero el clasificador no sabe elegirlos, y `wta_cls` es ~40×
+mayor que `wta_reg`. La hipótesis era que `cls_weight=1.0` estaba mal calibrado y
+que bajarlo recuperaría la regresión.
+
+### El barrido
+
+3 pesos × 2 folds × 4 semillas. El `1.0` ya estaba medido y entra de cuarto punto.
+
+| `cls_weight` | efecto vs k=1 | folds a favor | n |
+|---|---|---|---|
+| 0,01 | +1,122 | 0/2 | 2 folds |
+| **0,05** | **−0,264** | **2/2** | 2 folds |
+| 0,2 | +0,020 | 0/2 | 2 folds |
+| 1,0 | +0,298 | 0/5 | 5 folds (exp. 24) |
+
+El 0,05 parecía sólido: único que le ganaba al k=1, y con un efecto relativo casi
+idéntico en los dos folds (**−7,6 %** y **−8,1 %**).
+
+**La hipótesis monótona era falsa.** La brecha ADE − minADE en el fold 0 va
+3,32 / 1,35 / 1,80 / 2,26 para 0,01 / 0,05 / 0,2 / 1,0: tiene un **mínimo**, no una
+pendiente. Con 0,01 el clasificador se queda sin gradiente y elige casi al azar
+entre modos muy especializados — peor que no tener modos.
+
+### La validación, y por qué se diseñó así
+
+Los folds 0 y 1 son donde se **eligió** el 0,05. Reportar ahí sería sesgo de
+selección. `run_clsweight_val.sh` corrió el 0,05 sobre los **folds 2, 3 y 4, que
+nunca participaron de la elección**, y completó las semillas 4-7 de los folds 0-1
+para poder publicar la tabla de 5 folds.
+
+**El test independiente no replica — da vuelta el signo:**
+
+| fold | efecto vs k=1 |
+|---|---|
+| 2 | +0,342 |
+| 3 | +0,214 |
+| 4 | +0,116 |
+| **entre folds (n=3)** | **+0,224 ± 0,113 · p=0,075 · 0/3 folds** |
+
+Tabla de 5 folds (folds 0-1 **sesgados** por la elección): +0,069 ± 0,250, p=0,57,
+2/5 folds. Con las 8 semillas, la ventaja del fold 1 se encogió de −0,184 a −0,014.
+
+### Lo que se concluye
+
+**Ningún `cls_weight` probado mejora la predicción real.** El 0,05 es, en el mejor
+de los casos, indistinguible del k=1; en los folds retenidos es peor.
+
+La multimodalidad con winner-takes-all **no aporta en este peldaño**. La explicación
+más probable no es la pérdida sino los datos: 236 ventanas de entrenamiento
+repartidas en 6 modos dan ~39 ejemplos por modo. Es el mismo cuello del
+experimento 21.
+
+### El hallazgo del exp. 24 se refuerza
+
+minADE_6 con `cls_weight=0,05`, sobre los 5 folds: **−0,858 (−29 %), p=0,003,
+5/5 folds** — mientras el ADE real no mejora (2/5 folds, p=0,57). El mismo patrón
+que en el 24 con `cls_weight=1,0`, ahora en **folds independientes y con otro
+hiperparámetro**. Ya no es un accidente de un peso: es cómo se comporta el WTA acá.
+
+### El segundo hallazgo, metodológico
+
+**Elegir el mejor de 3 pesos sobre 2 folds fabricó un efecto que parecía sólido y
+que se dio vuelta en los folds retenidos.** No fue un número ruidoso y evidente: era
+−7,6 % y −8,1 %, dos folds de acuerdo, con la consistencia que uno usa como señal de
+confianza. Pasó a +0,224 y 0/3 folds.
+
+Es la regla 2 en acción, y esta vez el diseño lo atrapó **antes** de que llegara a
+ninguna conclusión — a diferencia de las once retractaciones anteriores. Lo que lo
+hizo posible fue decidir la partición **antes** de mirar: los folds de validación se
+fijaron al escribir el barrido, no después de ver el resultado.
+
+**Regla que queda:** todo hiperparámetro elegido por barrido se valida en folds que
+no participaron de la elección, y el número que se reporta es el de esos folds.
+
+---
+
+## Experimento 26: la época del encoder no cambia nada — la adenda del 23 queda cerrada
+
+**Fecha:** 2026-09-03 · **Rama:** `decoder/multimodal-wta`
+**Scripts:** `run_curva_mae.sh` + `curva_mae_voxel.py`
+**CSV:** `work_dirs/f1cv_curva/curva_fold{0..4}.csv`
+**n = 5 folds × 101 checkpoints** (épocas 10..1000 cada 10, más el modelo sin entrenar),
+4 máscaras pareadas por ventana, población `val` = las 2 escenas RETENIDAS de cada fold.
+
+### Por qué
+
+La adenda del experimento 23 midió las épocas 600/800/1000 y no encontró
+degradación, pero dejó dicho lo que no podía probar: el config tiene
+`checkpoint=dict(interval=200, max_keep_ckpts=3)`, así que eso es **el último 40 %**
+y en disco no quedaba nada anterior. En range-view el óptimo estaba en la época 50
+de 6000 (0,8 % de la corrida); el equivalente acá sería la época ~8, y un pico así
+de temprano se vería exactamente como la meseta plana que midió la adenda.
+
+Importaba porque **toda la Fase 1 (exp. 19-22) usó `epoch_1000`**, y es el conjunto
+que respondió que la escena no aporta (0/5 folds).
+
+### El control de sanidad, primero
+
+Misma semilla y mismo config, solo cambia el hook de checkpoint. La época 1000 de la
+curva reproduce el valor de la adenda en los cinco folds:
+
+| fold | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| diferencia vs adenda | −0,0000 | −0,0000 | +0,0000 | −0,0000 | +0,0025 |
+
+La curva es comparable con la adenda tensor a tensor.
+
+### El "mejor checkpoint" es un artefacto, y hay que decirlo
+
+`curva_mae_voxel.py` imprime la época de menor pérdida. Esas épocas son
+**530, 450, 960, 30 y 100** — dispersas por todo el rango. En el fold 0 el mínimo
+cae a **−2,69 sd** de la media de los 91 checkpoints posteriores a la época 100, y
+el máximo a +2,42 sd: exactamente los extremos que produce tomar el mejor de 91
+sorteos con sd 0,0052.
+
+**Ese número no se cita.** Es la trampa 29 —elegir el mejor de muchos sobre una sola
+medición— en otra forma. La lectura correcta promedia el ruido en ventanas gruesas.
+
+### Resultado 1 — ¿se degrada al final? No
+
+Meseta (épocas 100-600) contra último tercio (700-1000), fold por fold:
+
+| fold | meseta | último tercio | efecto |
+|---|---|---|---|
+| 0 | 0,1867 | 0,1933 | +3,6 % |
+| 1 | 0,2273 | 0,2501 | +10,0 % |
+| 2 | 0,1440 | 0,1291 | **−10,4 %** |
+| 3 | 0,1630 | 0,1611 | −1,1 % |
+| 4 | 0,1727 | 0,2001 | +15,9 % |
+
+**Entre folds: +0,0080 ± 0,0175 · t=1,03 · p=0,36 · 3/5 folds.**
+
+No hay degradación sistemática. El fold 0 solo daba +3,6 % y parecía una señal; el
+fold 2 va en dirección contraria por −10,4 %. La varianza entre folds se come el
+efecto — el patrón de siempre en este proyecto, y la razón de la regla 2.
+
+### Resultado 2 — ¿hay un pico temprano como en range-view? Tendencia, no
+
+Épocas 10-100 contra el resto (110-1000):
+
+| fold | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| efecto | −2,8 % | −10,3 % | **+7,4 %** | −16,2 % | −11,3 % |
+
+**Entre folds: −0,0134 ± 0,0155 · −6,6 % · t=−1,92 · p=0,127 · 4/5 folds.**
+
+Cuatro de cinco folds prefieren las épocas tempranas, pero no llega a significancia.
+Es el mismo territorio que el hallazgo de capacidad (p=0,102, 5/5 folds): una
+dirección consistente que no alcanza el umbral con n=5.
+
+### Lo que se concluye
+
+**La elección de época del encoder no compromete los experimentos 19-22.** Toda la
+caída ocurre antes de la época 10 (0,748 → 0,188 en el fold 0); después la curva es
+ruido alrededor de una meseta. `epoch_1000` es defendible.
+
+La adenda del experimento 23 queda **cerrada**, y con mucho mejor respaldo: no era
+que sus tres mediciones cayeran después de un pico, es que **no hay un pico**.
+
+### Lo que este experimento NO tocó, y es lo que importa
+
+Todo esto mide **pérdida de reconstrucción del MAE**. El vínculo entre reconstrucción
+y ADE **nunca se estableció en este proyecto**: no hay ninguna medición de que un
+encoder que reconstruye mejor produzca una trayectoria mejor.
+
+O sea que aun si el pico temprano hubiera dado significativo, no se seguía que
+re-correr los exp. 19-20 con esa época mejorara nada. El seguimiento que se había
+fijado de antemano —re-correr con la época 300— **no se dispara**, y de todos modos
+habría sido un salto por encima de un eslabón sin medir.
+
+Ese eslabón es medible y es barato: el fold 3 tiene un 27 % de diferencia de
+reconstrucción entre la época 30 y la 1000. Correr el decoder con los dos encoders y
+comparar el ADE responde si la reconstrucción predice algo del desempeño río abajo —
+una pregunta más básica que cualquiera de las que veníamos haciendo.
+
+---
+
+## Experimento 27: la reconstrucción del MAE NO predice el ADE
+
+**Fecha:** 2026-09-04 · **Rama:** `decoder/multimodal-wta`
+**Scripts:** `recon_dos_ckpts.py` (eje x) + `run_recon_ade.sh` (eje y)
+**CSV:** `work_dirs/recon_ade/recon_ade_results.csv`, `work_dirs/f1cv_curva/recon_dos_ckpts.csv`
+**n = 5 folds × 4 semillas × 2 encoders** (40 corridas), pareado por (fold, semilla);
+el test entre folds usa **n = 5 folds**.
+
+### Por qué
+
+Los experimentos 17, 21, 23 y 26 miden **pérdida de reconstrucción** del encoder y
+sacan conclusiones sobre el pipeline. Pero nunca se verificó que un encoder que
+reconstruye mejor produzca una trayectoria mejor. Todo ese diagnóstico descansaba en
+un supuesto sin medir.
+
+### El diseño
+
+El experimento 26 dejó, por fold, dos encoders del **mismo** pre-entrenamiento que
+difieren en reconstrucción. Se re-midieron con **máscaras frescas** (semillas 100-103;
+la selección del exp. 26 usó 0..3), porque la "mejor época" se eligió como mínimo de
+91 y su ventaja medida está sesgada. La ventaja se encogió un **37 %** por regresión
+a la media — y la del fold 0 se dio vuelta, confirmando **medido** que ese mínimo era
+artefacto de selección.
+
+**`use_gate=False`, y es lo central.** Con el gate aprendible el modelo lo cierra a
+~0,004: la escena no llega al decoder y cambiar de encoder no movería nada. Con la
+rama de escena siempre activa, la calidad del encoder puede expresarse. Es **la
+condición más favorable posible** a que la reconstrucción importe.
+
+Los dos encoders salen del mismo `work_dir`: la única diferencia entre brazos es la
+época, no la corrida de pre-entrenamiento.
+
+### Resultado
+
+| fold | ventaja de reconstrucción | efecto en ADE | semillas a favor |
+|---|---|---|---|
+| 0 | +1,4 % | +1,4 % | 2/4 |
+| 1 | −8,5 % | **−38,7 %** | 4/4 |
+| 2 | **−0,4 %** | **+32,6 %** | 0/4 |
+| 3 | −16,1 % | −14,5 % | 2/4 |
+| 4 | **−24,4 %** | **+2,3 %** | 1/4 |
+
+**Entre folds: −0,063 ± 1,027 · t=−0,14 · p=0,90 · 2/5 folds.**
+
+**Correlación reconstrucción–ADE: r = +0,34** (t=0,62, df=3; en relativos r=+0,29).
+Si la reconstrucción predijera el ADE, r debería estar cerca de **+1**.
+
+### Lo que lo cierra
+
+Las dos filas que matan la hipótesis son la 4 y la 2:
+
+- El fold **4** tiene la **mayor** ventaja de reconstrucción de los cinco (−24,4 %) y
+  produce un efecto en ADE de **+2,3 %** con 1/4 semillas: **cero**.
+- El fold **2** tiene una diferencia de reconstrucción de **−0,4 %** —o sea ninguna— y
+  produce **+32,6 %** de diferencia en ADE, con 4/4 semillas de acuerdo.
+
+El orden de los efectos no sigue al de las ventajas. El efecto más grande está donde
+la ventaja es mediana (fold 1) y el segundo más grande, invertido, donde la ventaja es
+nula (fold 2).
+
+### El piso de ruido, que es un resultado en sí
+
+Los folds 0 y 2 funcionan como **control natural**: reconstrucción prácticamente
+idéntica entre los dos encoders, y sin embargo dan **+1,4 %** y **+32,6 %** de
+diferencia en ADE. O sea que **dos encoders que reconstruyen igual producen decoders
+que difieren hasta un 33 % en ADE**.
+
+Eso explica por qué el −38,7 % del fold 1 no significa nada: cae dentro de ese piso.
+Y explica algo más: el pareo por semilla cancela el **87 %** del ruido (sd 1,996 →
+0,265 en el fold 0), pero **no cancela nada del ruido de identidad del encoder**, que
+es el que domina.
+
+### Lo que hay que releer con esta luz
+
+**Medir reconstrucción del MAE no informa sobre el desempeño río abajo.** Los
+diagnósticos de encoder de los experimentos 17, 21, 23 y 26 son válidos como lo que
+son —mediciones de reconstrucción— pero **no autorizan conclusiones sobre ADE**, y en
+varios lugares se las usó como si lo hicieran.
+
+En particular, el experimento 26 concluyó que la elección de época no compromete los
+exp. 19-22 porque no hay pico en la curva de reconstrucción. Esa conclusión **se
+mantiene, pero por otra razón y más fuerte**: la época no importa porque la
+reconstrucción no importa.
+
+### Los dos límites, dichos
+
+1. **Régimen degradado.** Con `use_gate=False` el ADE absoluto ronda 7,4 contra 4,510
+   del baseline cinemático en el mismo fold y las mismas semillas: forzar la escena
+   activa cuesta un 66 %. La relación podría existir en un régimen donde la escena
+   ayude — pero ese régimen no se ha encontrado en 20 experimentos, y el gate aprendido
+   cierra justamente porque no existe.
+2. **n = 5 folds, 4 semillas.** Con r=+0,34 y df=3 no se puede *descartar* una
+   correlación moderada. Lo que sí se descarta es una relación fuerte y utilizable:
+   el fold con 24 % de ventaja no mostró nada.
+
+---
+
+## Experimento 28: la escena no contenía al objeto — centrarla en él lo arregla
+
+**Fecha:** 2026-09-04 · **Rama:** `decoder/multimodal-wta`
+**Script:** `run_objcentrico.sh` · **CSV:** `work_dirs/objcentrico/objcentrico_results.csv`
+**n = 5 folds × 4 semillas × 2 variantes** (40 corridas), pareado por (fold, semilla);
+el test entre folds usa **n = 5 folds**.
+
+### El hallazgo que lo origina
+
+La caja de vóxeles de Fase 1 cubre **±10 m alrededor del EGO**
+(`spatial_range=[-10,10,-10,10,-2,4]`, `voxel_res=2.0` → 10×10×3 = 300 tokens).
+Medido sobre las 236 ventanas del fold 0:
+
+| | |
+|---|---|
+| distancia mediana del objeto al ego | **32,7 m** |
+| percentil 75 / 90 | 45,5 m / 56,7 m |
+| **ventanas con el objeto dentro de la caja toda su historia** | **26/236 = 11,0 %** |
+| ventanas con el futuro completo dentro | 7,2 % |
+
+**En el 89 % de los casos el objeto a predecir no está en la escena que el encoder
+ve.** El modelo mira el entorno inmediato del sensor y se le pide predecir un agente
+que está a 33 m, fuera de la caja.
+
+Probablemente se llegó ahí optimizando el número de tokens: el default de la clase
+es ±40 m con `voxel_res=0.5` → 307.200 vóxeles, inviable. Bajarlo a ±10 m con res
+2.0 da los 300 tokens que el ViT consume — pero **dejó a los objetos afuera**.
+
+### Explica cuatro negativos de una vez
+
+| experimento | resultado | por qué |
+|---|---|---|
+| 19-20 | la escena no aporta, el gate cierra a 0,0042 | no hay objeto que ver; el gate hace bien en descartarla |
+| 19 | más capacidad no ayuda (p=0,102) | capacidad sobre una región irrelevante |
+| 22 | la historia completa no ayuda | más frames de lo mismo irrelevante |
+| 27 | la reconstrucción no predice el ADE (r=+0,34) | el encoder reconstruye el entorno del EGO |
+| 21 | los encoders **sí** generalizan | compatible: generalizan reconstruyendo el entorno del ego |
+
+No eran cinco resultados independientes apuntando a "faltan datos". Era **un defecto
+geométrico** visto desde cinco ángulos.
+
+### El cambio
+
+`centrar_en_objeto=True` traslada la nube por `−centers[0]` antes de voxelizar.
+Mismos 300 tokens, mismo costo. Verificado antes de correr nada:
+
+| control | resultado |
+|---|---|
+| objeto dentro de la caja toda su historia | **11,0 % → 100,0 %** |
+| la trayectoria cambia | **no** — max\|dif\| = 0 |
+| la escena cambia | sí |
+| ocupación / grillas vacías | 35,9 % → 27,4 % / ninguna |
+
+Que la trayectoria no cambie es lo que hace limpio el experimento: **lo único que
+difiere entre brazos es la escena**. Y con el default la ocupación da 35,9 %, el
+número ya documentado: el camino anterior quedó intacto.
+
+**Default `False` a propósito**: los experimentos 15-27 se midieron con la caja
+ego-céntrica y tienen que seguir reproduciéndose.
+
+**Arregla también la augmentación.** `_augment` rota `relative` alrededor del objeto
+y la grilla con `np.rot90`, o sea alrededor del centro de la grilla. Con la caja
+ego-céntrica son dos puntos distintos y el giro es incoherente, pese a que el
+comentario dice "aplicada consistentemente". Centrando en el objeto comparten centro.
+
+### Control de sanidad
+
+Con el gate congelado en 0 la escena se anula, así que `gate0_obj` debe reproducir
+exactamente el `gate0` ego-céntrico. Lo hace, semilla por semilla:
+
+| semilla | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| `gate0` (ego) | 3,099 | 3,215 | 4,378 | 5,001 |
+| `gate0_obj` | 3,099 | 3,215 | 4,378 | 5,001 |
+
+Diferencia 0,000 en las cuatro. Confirma que el cambio no tocó nada fuera de la
+escena y que las dos mediciones comparten referencia.
+
+### Resultado
+
+Efecto de la escena (`gated − gate0`), fold a fold, en las dos geometrías:
+
+| fold | ego-céntrico | objeto-céntrico | mejora |
+|---|---|---|---|
+| 0 | +0,841 | +0,282 | −0,560 |
+| 1 | +0,238 | −0,260 | −0,498 |
+| 2 | +0,005 | −0,024 | −0,029 |
+| 3 | +0,247 | +0,033 | −0,214 |
+| 4 | +0,041 | −0,108 | −0,148 |
+| **media** | **+0,274** | **−0,015** | **−0,290** |
+
+**Centrar en el objeto mejora −0,290 ± 0,229 · t=−2,83 · p=0,0475 · 5/5 folds.**
+
+Y el efecto absoluto de la escena pasa de **+0,274 (perjudica, 0/5 folds)** a
+**−0,015 (neutro, p=0,87, 3/5 folds)**.
+
+### Lo que se concluye, y lo que no
+
+**Sí:** la escena LiDAR pasó de **perjudicar** a ser **neutra**, con los cinco folds
+de acuerdo. Es el primer resultado significativo a favor de la escena en 28
+experimentos, y tiene un mecanismo medido detrás, no una hipótesis post hoc.
+
+**No:** que la escena aporte. El efecto absoluto sigue siendo indistinguible de cero.
+
+Y el gate lo confirma: arrancando de 0,05, cierra a **−0,0001 / +0,0021 / +0,0030 /
++0,0043 / +0,0049** en los cinco folds. Con el objeto dentro de la caja el 100 % de
+las veces y libertad para usar la escena, **el modelo la apaga igual**. Cuando el
+gate cierra, `gated_obj` colapsa sobre `gate0_obj`, y por eso el efecto es cero.
+
+O sea: el diagnóstico geométrico era **correcto pero incompleto**. Explicaba por qué
+la escena hacía daño. No explica por qué, ya corregido, sigue sin haber señal.
+
+**Lo que sí queda establecido es que el "la escena no aporta" de los exp. 19-20
+estaba contaminado**: se midió con una escena que en el 89 % de los casos no
+contenía al objeto. La pregunta central recién ahora está bien planteada.
+
+### Salvedades
+
+1. **p=0,0475 está justo bajo el umbral, con n=5 folds.** Este proyecto ya vio dos
+   veces un efecto así darse vuelta al validarlo. Lo que da confianza no es la p
+   sino los 5/5 folds y el mecanismo medido. **Replicar con 8 semillas antes de
+   tratarlo como establecido.**
+2. **El encoder MAE sigue siendo ego-céntrico.** `LidarSequenceDataset` no conoce
+   los objetos, así que centrar el pre-entrenamiento es un cambio aparte. Hay
+   desajuste de dominio, y juega EN CONTRA: el resultado se obtuvo a pesar de él.
+3. **Los tipos de agente siguen mezclados** — 88,1 % vehículos, 5,9 % ciclistas,
+   5,9 % peatones (clasificados por tamaño de caja; la extracción no guardó el tipo,
+   `for track in proto.tracks` sin filtro). Un peatón se mueve 10× más lento y
+   comparte cabeza y normalización con los autos. No se tocó a propósito: dos
+   cambios a la vez habrían impedido atribuir la mejora.
+
+### Lo que esto abre
+
+Si el modelo apaga una escena que **sí** contiene al objeto, el cuello está antes o
+después del encoder, no en él. Y hay un candidato medido: la escena que entra son
+**300 vóxeles × 5 frames de ocupación BINARIA = 1.500 bits**, con vóxeles de 2 m
+donde un auto ocupa 2,2×1 y **un peatón 0,4×0,4 — menos de uno**. Se comprimen 6.345
+puntos LiDAR a 1.500 bits, 4 puntos por bit, sin intensidad ni densidad ni altura
+fina.
+
+Del otro lado, los 300 tokens de 1024 dims se comprimen con **una sola query** de
+cross-attention a **64 dims** antes de concatenarse con la historia.
+
+De los tres eslabones —representación de entrada, encoder, consumo en el decoder—
+el encoder es el único medido y funciona (exp. 21). Los otros dos no se tocaron en
+28 experimentos.
+
+Esto además reinterpreta el exp. 27: **reconstruir ocupación binaria bien no exige
+codificar nada útil para predecir movimiento**. El objetivo del MAE puede estar
+desalineado con la tarea, que es distinto de que el encoder sea malo.
