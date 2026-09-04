@@ -497,6 +497,18 @@ posteriores.**
     de los 91 checkpoints —justo el extremo que produce el mejor de 91 sorteos con
     sd 0,0052—. La lectura correcta promedia el ruido en ventanas gruesas.
 
+30. **La reconstrucción del MAE no predice el ADE: medida en el experimento 27,
+    r=+0,34 sobre 5 folds.** El fold con la MAYOR ventaja de reconstrucción
+    (−24,4 %) dio +2,3 % de efecto en ADE —cero—, y el fold con ventaja NULA
+    (−0,4 %) dio +32,6 %. Dos encoders que reconstruyen igual producen decoders
+    que difieren hasta un 33 % en ADE: ese es el piso de ruido, y el pareo por
+    semilla no lo toca (cancela el 87 % del ruido de semilla, nada del de
+    identidad del encoder). Medido con `use_gate=False`, la condición MÁS
+    favorable a que el encoder importe. **Los diagnósticos de reconstrucción de
+    los exp. 17, 21, 23 y 26 son válidos como mediciones de reconstrucción, pero
+    no autorizan conclusiones sobre ADE** — y en varios lugares se los usó como si
+    lo hicieran.
+
 ---
 
 ## El hueco de reproducibilidad

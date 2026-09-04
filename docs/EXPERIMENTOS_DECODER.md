@@ -1969,3 +1969,100 @@ Ese eslabón es medible y es barato: el fold 3 tiene un 27 % de diferencia de
 reconstrucción entre la época 30 y la 1000. Correr el decoder con los dos encoders y
 comparar el ADE responde si la reconstrucción predice algo del desempeño río abajo —
 una pregunta más básica que cualquiera de las que veníamos haciendo.
+
+---
+
+## Experimento 27: la reconstrucción del MAE NO predice el ADE
+
+**Fecha:** 2026-09-04 · **Rama:** `decoder/multimodal-wta`
+**Scripts:** `recon_dos_ckpts.py` (eje x) + `run_recon_ade.sh` (eje y)
+**CSV:** `work_dirs/recon_ade/recon_ade_results.csv`, `work_dirs/f1cv_curva/recon_dos_ckpts.csv`
+**n = 5 folds × 4 semillas × 2 encoders** (40 corridas), pareado por (fold, semilla);
+el test entre folds usa **n = 5 folds**.
+
+### Por qué
+
+Los experimentos 17, 21, 23 y 26 miden **pérdida de reconstrucción** del encoder y
+sacan conclusiones sobre el pipeline. Pero nunca se verificó que un encoder que
+reconstruye mejor produzca una trayectoria mejor. Todo ese diagnóstico descansaba en
+un supuesto sin medir.
+
+### El diseño
+
+El experimento 26 dejó, por fold, dos encoders del **mismo** pre-entrenamiento que
+difieren en reconstrucción. Se re-midieron con **máscaras frescas** (semillas 100-103;
+la selección del exp. 26 usó 0..3), porque la "mejor época" se eligió como mínimo de
+91 y su ventaja medida está sesgada. La ventaja se encogió un **37 %** por regresión
+a la media — y la del fold 0 se dio vuelta, confirmando **medido** que ese mínimo era
+artefacto de selección.
+
+**`use_gate=False`, y es lo central.** Con el gate aprendible el modelo lo cierra a
+~0,004: la escena no llega al decoder y cambiar de encoder no movería nada. Con la
+rama de escena siempre activa, la calidad del encoder puede expresarse. Es **la
+condición más favorable posible** a que la reconstrucción importe.
+
+Los dos encoders salen del mismo `work_dir`: la única diferencia entre brazos es la
+época, no la corrida de pre-entrenamiento.
+
+### Resultado
+
+| fold | ventaja de reconstrucción | efecto en ADE | semillas a favor |
+|---|---|---|---|
+| 0 | +1,4 % | +1,4 % | 2/4 |
+| 1 | −8,5 % | **−38,7 %** | 4/4 |
+| 2 | **−0,4 %** | **+32,6 %** | 0/4 |
+| 3 | −16,1 % | −14,5 % | 2/4 |
+| 4 | **−24,4 %** | **+2,3 %** | 1/4 |
+
+**Entre folds: −0,063 ± 1,027 · t=−0,14 · p=0,90 · 2/5 folds.**
+
+**Correlación reconstrucción–ADE: r = +0,34** (t=0,62, df=3; en relativos r=+0,29).
+Si la reconstrucción predijera el ADE, r debería estar cerca de **+1**.
+
+### Lo que lo cierra
+
+Las dos filas que matan la hipótesis son la 4 y la 2:
+
+- El fold **4** tiene la **mayor** ventaja de reconstrucción de los cinco (−24,4 %) y
+  produce un efecto en ADE de **+2,3 %** con 1/4 semillas: **cero**.
+- El fold **2** tiene una diferencia de reconstrucción de **−0,4 %** —o sea ninguna— y
+  produce **+32,6 %** de diferencia en ADE, con 4/4 semillas de acuerdo.
+
+El orden de los efectos no sigue al de las ventajas. El efecto más grande está donde
+la ventaja es mediana (fold 1) y el segundo más grande, invertido, donde la ventaja es
+nula (fold 2).
+
+### El piso de ruido, que es un resultado en sí
+
+Los folds 0 y 2 funcionan como **control natural**: reconstrucción prácticamente
+idéntica entre los dos encoders, y sin embargo dan **+1,4 %** y **+32,6 %** de
+diferencia en ADE. O sea que **dos encoders que reconstruyen igual producen decoders
+que difieren hasta un 33 % en ADE**.
+
+Eso explica por qué el −38,7 % del fold 1 no significa nada: cae dentro de ese piso.
+Y explica algo más: el pareo por semilla cancela el **87 %** del ruido (sd 1,996 →
+0,265 en el fold 0), pero **no cancela nada del ruido de identidad del encoder**, que
+es el que domina.
+
+### Lo que hay que releer con esta luz
+
+**Medir reconstrucción del MAE no informa sobre el desempeño río abajo.** Los
+diagnósticos de encoder de los experimentos 17, 21, 23 y 26 son válidos como lo que
+son —mediciones de reconstrucción— pero **no autorizan conclusiones sobre ADE**, y en
+varios lugares se las usó como si lo hicieran.
+
+En particular, el experimento 26 concluyó que la elección de época no compromete los
+exp. 19-22 porque no hay pico en la curva de reconstrucción. Esa conclusión **se
+mantiene, pero por otra razón y más fuerte**: la época no importa porque la
+reconstrucción no importa.
+
+### Los dos límites, dichos
+
+1. **Régimen degradado.** Con `use_gate=False` el ADE absoluto ronda 7,4 contra 4,510
+   del baseline cinemático en el mismo fold y las mismas semillas: forzar la escena
+   activa cuesta un 66 %. La relación podría existir en un régimen donde la escena
+   ayude — pero ese régimen no se ha encontrado en 20 experimentos, y el gate aprendido
+   cierra justamente porque no existe.
+2. **n = 5 folds, 4 semillas.** Con r=+0,34 y df=3 no se puede *descartar* una
+   correlación moderada. Lo que sí se descarta es una relación fuerte y utilizable:
+   el fold con 24 % de ventaja no mostró nada.
