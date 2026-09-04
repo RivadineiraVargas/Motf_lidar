@@ -35,12 +35,28 @@ modificar.
    Antes de proponer cualquier aumento de datos: decir en qué peldaño estamos y por
    qué su resultado ya es bueno. Ya me desvié de esto cuatro veces.
 
-**Estado al 02/09/2026.** Tres resultados independientes cierran la línea de
-variantes de arquitectura: la escena LiDAR no aporta (0/5 folds), la capacidad va
-en la misma dirección en los cinco folds pero no llega a significancia (p=0,102), y
-la historia completa de 1,1 s no mejora y sobreajusta (1/5 folds). El encoder **sí**
-generaliza, así que no es eso. El cuello está medido: 236 ventanas de entrenamiento
-desde 8 escenas, y un MAE pre-entrenado con 8 muestras.
+**Estado al 04/09/2026.** El 04/09 se midió que la caja de vóxeles estaba centrada
+en el EGO y que **el objeto a predecir estaba dentro en solo el 11 % de las
+ventanas** (mediana: 32,7 m del ego). Centrarla en el objeto (exp. 28) mejora
+**−0,290, p=0,047, 5/5 folds** y lleva la escena de **perjudicar** (+0,274, 0/5) a
+**neutra** (−0,015, p=0,87). Es el primer resultado significativo a favor de la
+escena en 28 experimentos.
+
+**Consecuencia:** los negativos anteriores —la escena no aporta (exp. 19-20), la
+capacidad (p=0,102), la historia completa (exp. 22), la reconstrucción no predice el
+ADE (exp. 27)— se midieron todos con esa caja y **quedan contaminados**. Eran un
+defecto geométrico visto desde cinco ángulos, no cinco resultados independientes.
+
+**Pero la escena sigue sin aportar**: el gate cierra a ~0,003 en los cinco folds
+arrancando de 0,05. El modelo la apaga aun teniendo el objeto dentro. El siguiente
+sospechoso está medido y es la representación: la escena que entra son **1.500 bits**
+(300 vóxeles × 5 frames, ocupación binaria, vóxeles de 2 m donde un peatón ocupa
+0,4×0,4), y sale por **una sola query** de cross-attention comprimida a 64 dims. De
+los tres eslabones —representación, encoder, consumo— el encoder es el único medido
+y funciona (exp. 21); los otros dos no se tocaron en 28 experimentos.
+
+El cuello de datos sigue en pie —236 ventanas desde 8 escenas, un MAE con 8
+muestras— pero ya no es la única explicación disponible.
 
 Pero que el cuello sea de datos **no autoriza a ir a buscarlos** (regla 5). El
 peldaño vigente es **10-100 sweeps, con 275 en disco, y su resultado todavía no es
@@ -49,6 +65,6 @@ bueno**: a 100 sweeps el encoder pica cerca de la época 1000 y después memoriz
 "La ruta" en el mapa, que arranca con la puerta.
 
 Ver [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) para la arquitectura, el flujo de
-datos, las 30 trampas, la guía de navegación y **la ruta**. Ver
+datos, las 32 trampas, la guía de navegación y **la ruta**. Ver
 `docs/EXPERIMENTOS_DECODER.md` para los 22 experimentos con sus números y comandos
 de reproducción.

@@ -2066,3 +2066,156 @@ reconstrucción no importa.
 2. **n = 5 folds, 4 semillas.** Con r=+0,34 y df=3 no se puede *descartar* una
    correlación moderada. Lo que sí se descarta es una relación fuerte y utilizable:
    el fold con 24 % de ventaja no mostró nada.
+
+---
+
+## Experimento 28: la escena no contenía al objeto — centrarla en él lo arregla
+
+**Fecha:** 2026-09-04 · **Rama:** `decoder/multimodal-wta`
+**Script:** `run_objcentrico.sh` · **CSV:** `work_dirs/objcentrico/objcentrico_results.csv`
+**n = 5 folds × 4 semillas × 2 variantes** (40 corridas), pareado por (fold, semilla);
+el test entre folds usa **n = 5 folds**.
+
+### El hallazgo que lo origina
+
+La caja de vóxeles de Fase 1 cubre **±10 m alrededor del EGO**
+(`spatial_range=[-10,10,-10,10,-2,4]`, `voxel_res=2.0` → 10×10×3 = 300 tokens).
+Medido sobre las 236 ventanas del fold 0:
+
+| | |
+|---|---|
+| distancia mediana del objeto al ego | **32,7 m** |
+| percentil 75 / 90 | 45,5 m / 56,7 m |
+| **ventanas con el objeto dentro de la caja toda su historia** | **26/236 = 11,0 %** |
+| ventanas con el futuro completo dentro | 7,2 % |
+
+**En el 89 % de los casos el objeto a predecir no está en la escena que el encoder
+ve.** El modelo mira el entorno inmediato del sensor y se le pide predecir un agente
+que está a 33 m, fuera de la caja.
+
+Probablemente se llegó ahí optimizando el número de tokens: el default de la clase
+es ±40 m con `voxel_res=0.5` → 307.200 vóxeles, inviable. Bajarlo a ±10 m con res
+2.0 da los 300 tokens que el ViT consume — pero **dejó a los objetos afuera**.
+
+### Explica cuatro negativos de una vez
+
+| experimento | resultado | por qué |
+|---|---|---|
+| 19-20 | la escena no aporta, el gate cierra a 0,0042 | no hay objeto que ver; el gate hace bien en descartarla |
+| 19 | más capacidad no ayuda (p=0,102) | capacidad sobre una región irrelevante |
+| 22 | la historia completa no ayuda | más frames de lo mismo irrelevante |
+| 27 | la reconstrucción no predice el ADE (r=+0,34) | el encoder reconstruye el entorno del EGO |
+| 21 | los encoders **sí** generalizan | compatible: generalizan reconstruyendo el entorno del ego |
+
+No eran cinco resultados independientes apuntando a "faltan datos". Era **un defecto
+geométrico** visto desde cinco ángulos.
+
+### El cambio
+
+`centrar_en_objeto=True` traslada la nube por `−centers[0]` antes de voxelizar.
+Mismos 300 tokens, mismo costo. Verificado antes de correr nada:
+
+| control | resultado |
+|---|---|
+| objeto dentro de la caja toda su historia | **11,0 % → 100,0 %** |
+| la trayectoria cambia | **no** — max\|dif\| = 0 |
+| la escena cambia | sí |
+| ocupación / grillas vacías | 35,9 % → 27,4 % / ninguna |
+
+Que la trayectoria no cambie es lo que hace limpio el experimento: **lo único que
+difiere entre brazos es la escena**. Y con el default la ocupación da 35,9 %, el
+número ya documentado: el camino anterior quedó intacto.
+
+**Default `False` a propósito**: los experimentos 15-27 se midieron con la caja
+ego-céntrica y tienen que seguir reproduciéndose.
+
+**Arregla también la augmentación.** `_augment` rota `relative` alrededor del objeto
+y la grilla con `np.rot90`, o sea alrededor del centro de la grilla. Con la caja
+ego-céntrica son dos puntos distintos y el giro es incoherente, pese a que el
+comentario dice "aplicada consistentemente". Centrando en el objeto comparten centro.
+
+### Control de sanidad
+
+Con el gate congelado en 0 la escena se anula, así que `gate0_obj` debe reproducir
+exactamente el `gate0` ego-céntrico. Lo hace, semilla por semilla:
+
+| semilla | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| `gate0` (ego) | 3,099 | 3,215 | 4,378 | 5,001 |
+| `gate0_obj` | 3,099 | 3,215 | 4,378 | 5,001 |
+
+Diferencia 0,000 en las cuatro. Confirma que el cambio no tocó nada fuera de la
+escena y que las dos mediciones comparten referencia.
+
+### Resultado
+
+Efecto de la escena (`gated − gate0`), fold a fold, en las dos geometrías:
+
+| fold | ego-céntrico | objeto-céntrico | mejora |
+|---|---|---|---|
+| 0 | +0,841 | +0,282 | −0,560 |
+| 1 | +0,238 | −0,260 | −0,498 |
+| 2 | +0,005 | −0,024 | −0,029 |
+| 3 | +0,247 | +0,033 | −0,214 |
+| 4 | +0,041 | −0,108 | −0,148 |
+| **media** | **+0,274** | **−0,015** | **−0,290** |
+
+**Centrar en el objeto mejora −0,290 ± 0,229 · t=−2,83 · p=0,0475 · 5/5 folds.**
+
+Y el efecto absoluto de la escena pasa de **+0,274 (perjudica, 0/5 folds)** a
+**−0,015 (neutro, p=0,87, 3/5 folds)**.
+
+### Lo que se concluye, y lo que no
+
+**Sí:** la escena LiDAR pasó de **perjudicar** a ser **neutra**, con los cinco folds
+de acuerdo. Es el primer resultado significativo a favor de la escena en 28
+experimentos, y tiene un mecanismo medido detrás, no una hipótesis post hoc.
+
+**No:** que la escena aporte. El efecto absoluto sigue siendo indistinguible de cero.
+
+Y el gate lo confirma: arrancando de 0,05, cierra a **−0,0001 / +0,0021 / +0,0030 /
++0,0043 / +0,0049** en los cinco folds. Con el objeto dentro de la caja el 100 % de
+las veces y libertad para usar la escena, **el modelo la apaga igual**. Cuando el
+gate cierra, `gated_obj` colapsa sobre `gate0_obj`, y por eso el efecto es cero.
+
+O sea: el diagnóstico geométrico era **correcto pero incompleto**. Explicaba por qué
+la escena hacía daño. No explica por qué, ya corregido, sigue sin haber señal.
+
+**Lo que sí queda establecido es que el "la escena no aporta" de los exp. 19-20
+estaba contaminado**: se midió con una escena que en el 89 % de los casos no
+contenía al objeto. La pregunta central recién ahora está bien planteada.
+
+### Salvedades
+
+1. **p=0,0475 está justo bajo el umbral, con n=5 folds.** Este proyecto ya vio dos
+   veces un efecto así darse vuelta al validarlo. Lo que da confianza no es la p
+   sino los 5/5 folds y el mecanismo medido. **Replicar con 8 semillas antes de
+   tratarlo como establecido.**
+2. **El encoder MAE sigue siendo ego-céntrico.** `LidarSequenceDataset` no conoce
+   los objetos, así que centrar el pre-entrenamiento es un cambio aparte. Hay
+   desajuste de dominio, y juega EN CONTRA: el resultado se obtuvo a pesar de él.
+3. **Los tipos de agente siguen mezclados** — 88,1 % vehículos, 5,9 % ciclistas,
+   5,9 % peatones (clasificados por tamaño de caja; la extracción no guardó el tipo,
+   `for track in proto.tracks` sin filtro). Un peatón se mueve 10× más lento y
+   comparte cabeza y normalización con los autos. No se tocó a propósito: dos
+   cambios a la vez habrían impedido atribuir la mejora.
+
+### Lo que esto abre
+
+Si el modelo apaga una escena que **sí** contiene al objeto, el cuello está antes o
+después del encoder, no en él. Y hay un candidato medido: la escena que entra son
+**300 vóxeles × 5 frames de ocupación BINARIA = 1.500 bits**, con vóxeles de 2 m
+donde un auto ocupa 2,2×1 y **un peatón 0,4×0,4 — menos de uno**. Se comprimen 6.345
+puntos LiDAR a 1.500 bits, 4 puntos por bit, sin intensidad ni densidad ni altura
+fina.
+
+Del otro lado, los 300 tokens de 1024 dims se comprimen con **una sola query** de
+cross-attention a **64 dims** antes de concatenarse con la historia.
+
+De los tres eslabones —representación de entrada, encoder, consumo en el decoder—
+el encoder es el único medido y funciona (exp. 21). Los otros dos no se tocaron en
+28 experimentos.
+
+Esto además reinterpreta el exp. 27: **reconstruir ocupación binaria bien no exige
+codificar nada útil para predecir movimiento**. El objetivo del MAE puede estar
+desalineado con la tarea, que es distinto de que el encoder sea malo.

@@ -509,6 +509,26 @@ posteriores.**
     no autorizan conclusiones sobre ADE** — y en varios lugares se los usó como si
     lo hicieran.
 
+31. **La caja de vóxeles estaba centrada en el EGO, y el objeto casi nunca estaba
+    dentro.** Medido sobre las 236 ventanas del fold 0 con `spatial_range=±10 m`:
+    el objeto está a **32,7 m** del ego (mediana) y solo el **11,0 %** de las
+    ventanas lo tienen dentro de la caja durante toda su historia (el futuro
+    completo, 7,2 %). O sea que en el 89 % de los casos el encoder miraba una
+    región que NO CONTENÍA al objeto a predecir. Explica de una sola vez los exp.
+    19-20, 19, 22 y 27. `centrar_en_objeto=True` (exp. 28) lo lleva al 100 % y
+    mejora **−0,290, p=0,047, 5/5 folds** — pero el gate sigue cerrando a ~0,003,
+    así que la escena pasó de perjudicar a neutra, no a aportar. **Todo resultado
+    de Fase 1 anterior al 04/09 se midió con la caja ego-céntrica.**
+
+32. **La escena que entra son 1.500 bits.** 300 vóxeles × 5 frames de ocupación
+    **binaria**, con vóxeles de 2 m: un auto ocupa 2,2×1 y **un peatón 0,4×0,4 —
+    menos de un vóxel**. Se comprimen ~6.345 puntos LiDAR a 1.500 bits (4 puntos
+    por bit) descartando intensidad, densidad y altura fina. Del otro lado, los 300
+    tokens de 1024 dims se reducen con **una sola query** de cross-attention a **64
+    dims**. De los tres eslabones —representación, encoder, consumo—, el encoder es
+    el único medido y funciona (exp. 21); los otros dos no se tocaron en 28
+    experimentos.
+
 ---
 
 ## El hueco de reproducibilidad
