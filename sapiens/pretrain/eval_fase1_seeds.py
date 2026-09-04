@@ -145,11 +145,47 @@ def main():
         print(f'[eval] modelo MULTIMODAL con K={K}: se reportan ade_all (modo más '
               f'probable, comparable con los exp. 15-22) y min_ade_k (el mejor de '
               f'los {K}, comparable con la literatura).')
+    # --- tipo de agente ---------------------------------------------------
+    # La extraccion guardo `for track in proto.tracks` SIN filtrar por tipo y sin
+    # guardar el object_type de Waymo, asi que la etiqueta se perdio: solo quedan
+    # los 8 vertices de la caja. Se recupera del tamanyo, que basta para separar
+    # un vehiculo de un peaton o un ciclista.
+    #
+    # POR QUE IMPORTA. Medido sobre las 236 ventanas del fold 0: 88,1 % vehiculos,
+    # 5,9 % ciclistas/motos y 5,9 % peatones. Un peaton se mueve ~1,5 m/s y un auto
+    # ~15 m/s, y comparten cabeza y normalizacion (norm_scale fija). El ADE que se
+    # venia reportando promedia las dos dinamicas.
+    #
+    # OJO CON EL UMBRAL: la caja de los 8 vertices esta ALINEADA A LOS EJES, asi
+    # que un vehiculo girado 45 grados da dimensiones infladas (se midieron autos
+    # en 5,4 x 4,0 m). Eso no afecta separar 5 m de 1,2 m, pero estos tamanyos no
+    # sirven para nada mas fino.
+    LARGO_VEHICULO = 3.0
+
+    def es_vehiculo(scene, object_id, frame0):
+        """True si la caja mide >= LARGO_VEHICULO en su lado mayor. None si no se
+        puede leer: en ese caso el objeto NO entra en ninguna poblacion por tipo,
+        en vez de caer en una por defecto y contaminarla en silencio."""
+        ruta = os.path.join(ds.data_root, 'objs_bbox', scene, str(frame0),
+                            f'{object_id}.txt')
+        try:
+            v = [[float(x) for x in l.split()] for l in open(ruta) if len(l.split()) == 3]
+        except OSError:
+            return None
+        if len(v) != 8:
+            return None
+        v = np.array(v)
+        ext = v.max(0) - v.min(0)
+        return bool(max(ext[0], ext[1]) >= LARGO_VEHICULO)
+
     per_scene = {}
     pred_len = cfg.pred_len
     for i in range(len(ds.data_list)):
+        it = ds.data_list[i]
         d = ds[i]
         scene = d['scene_name']
+        veh = es_vehiculo(scene, it['object_id'],
+                          it.get('frame0', it.get('t_start', 0)))
         # misma lógica de desnormalización que evaluate_clean10_newmae.py:
         # el dataset normaliza cada trayectoria con su propia media/desvío.
         with torch.no_grad():
@@ -195,7 +231,7 @@ def main():
             min_ade, min_fde = float(ade_k.min()), float(e[:, -1].min())
 
         per_scene.setdefault(scene, []).append(
-            (float(err.mean()), float(err[-1]), despl, min_ade, min_fde))
+            (float(err.mean()), float(err[-1]), despl, min_ade, min_fde, veh))
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     new = not os.path.exists(args.out)
@@ -208,13 +244,21 @@ def main():
             # 'minade'/'minfde' a --metrica y funciona sin más código. Un CSV de
             # 11 columnas y uno de 15 conviven en la misma corrida del agregador,
             # porque lee con csv.DictReader (por nombre, no por posición).
+            # Cinco columnas mas por el desglose de tipo (de 15 a 20). Mismo
+            # patron {metrica}_{poblacion}: 'veh' se suma a 'all' y 'moving' en
+            # agregar_resultados.py. Los CSV de 15 columnas siguen leyendose.
             w.writerow(['fold', 'variant', 'seed', 'scene', 'n_obj', 'n_moving',
                         'ade_all', 'fde_all', 'ade_moving', 'fde_moving', 'gate',
-                        'minade_all', 'minfde_all', 'minade_moving', 'minfde_moving'])
+                        'minade_all', 'minfde_all', 'minade_moving', 'minfde_moving',
+                        'n_veh', 'ade_veh', 'fde_veh', 'minade_veh', 'minfde_veh'])
         for sc, v in sorted(per_scene.items()):
             a = np.array([x[0] for x in v]); f = np.array([x[1] for x in v])
             mv = np.array([x[2] for x in v]) >= MOVING_MIN
             ma = np.array([x[3] for x in v]); mf = np.array([x[4] for x in v])
+            # None (bbox ilegible) queda FUERA de la poblacion de vehiculos, no
+            # dentro por defecto: contarlo como vehiculo mezclaria justo lo que
+            # este desglose separa.
+            vh = np.array([x[5] is True for x in v])
             w.writerow([args.fold, args.variant, args.seed, sc, len(v), int(mv.sum()),
                         f'{a.mean():.5f}', f'{f.mean():.5f}',
                         f'{a[mv].mean():.5f}' if mv.any() else '',
@@ -225,7 +269,12 @@ def main():
                         # igual para que el esquema sea uno solo.
                         f'{ma.mean():.5f}', f'{mf.mean():.5f}',
                         f'{ma[mv].mean():.5f}' if mv.any() else '',
-                        f'{mf[mv].mean():.5f}' if mv.any() else ''])
+                        f'{mf[mv].mean():.5f}' if mv.any() else '',
+                        int(vh.sum()),
+                        f'{a[vh].mean():.5f}' if vh.any() else '',
+                        f'{f[vh].mean():.5f}' if vh.any() else '',
+                        f'{ma[vh].mean():.5f}' if vh.any() else '',
+                        f'{mf[vh].mean():.5f}' if vh.any() else ''])
     print(f'[eval] {args.variant} seed {args.seed}: '
           + ', '.join(f'{sc} n={len(v)}' for sc, v in sorted(per_scene.items())))
 

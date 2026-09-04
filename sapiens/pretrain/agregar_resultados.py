@@ -141,8 +141,9 @@ def leer(paths, metrica, poblacion):
         no se desplaza. Con --poblacion moviles eso reventaba con un ValueError
         opaco. Ahora se saltea la escena avisando.
     """
-    col = f'{metrica}_{"moving" if poblacion == "moviles" else "all"}'
-    col_n = 'n_moving' if poblacion == 'moviles' else 'n_obj'
+    sufijo = {'moviles': 'moving', 'vehiculos': 'veh'}.get(poblacion, 'all')
+    col = f'{metrica}_{sufijo}'
+    col_n = {'moviles': 'n_moving', 'vehiculos': 'n_veh'}.get(poblacion, 'n_obj')
     ultima = {}          # (fold, variante, semilla, escena) -> (valor, n, gate)
     orden = []
     dups = 0
@@ -264,7 +265,8 @@ def main():
     ap.add_argument('csv', nargs='+', help='uno o más *_results.csv (acepta comodines)')
     ap.add_argument('--peso', choices=['objetos', 'escena'], default='objetos',
                     help='cómo promediar ENTRE escenas de validación (default: objetos)')
-    ap.add_argument('--poblacion', choices=['todos', 'moviles'], default='todos',
+    ap.add_argument('--poblacion', choices=['todos', 'moviles', 'vehiculos'],
+                    default='todos',
                     help='objetos a incluir (default: todos)')
     ap.add_argument('--metrica', choices=['ade', 'fde', 'minade', 'minfde'],
                     default='ade',
