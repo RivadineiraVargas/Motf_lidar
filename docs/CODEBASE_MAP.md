@@ -516,7 +516,9 @@ posteriores.**
     completo, 7,2 %). O sea que en el 89 % de los casos el encoder miraba una
     región que NO CONTENÍA al objeto a predecir. Explica de una sola vez los exp.
     19-20, 19, 22 y 27. `centrar_en_objeto=True` (exp. 28) lo lleva al 100 % y
-    mejora **−0,290, p=0,047, 5/5 folds** — pero el gate sigue cerrando a ~0,003,
+    mejora **−0,237, 5/5 folds pero p=0,086** con 8 semillas (con 4 daba −0,290 y
+    p=0,047: la replica lo encogio un 18 % y le saco la significancia — es una
+    TENDENCIA consistente, no un resultado establecido). El gate sigue cerrando a ~0,003,
     así que la escena pasó de perjudicar a neutra, no a aportar. **Todo resultado
     de Fase 1 anterior al 04/09 se midió con la caja ego-céntrica.**
 

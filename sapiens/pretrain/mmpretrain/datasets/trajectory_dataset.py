@@ -25,6 +25,7 @@ class TrajectoryDataset(BaseDataset):
                  clip_norm=5.0,
                  norm_scale=None,
                  centrar_en_objeto=False,
+                 densidad=False,
                  **kwargs):
         self.clip_norm = clip_norm
         # centrar_en_objeto: traslada la nube por -centers[0] ANTES de voxelizar,
@@ -50,6 +51,39 @@ class TrajectoryDataset(BaseDataset):
         # DEFAULT False A PROPOSITO: los experimentos 15-27 se midieron con la
         # caja ego-céntrica y tienen que seguir reproduciéndose exactamente.
         self.centrar_en_objeto = centrar_en_objeto
+        # densidad: el voxel guarda CUANTOS puntos cayeron, no si cayo alguno.
+        #
+        # POR QUE. Medido sobre 2.230 voxeles ocupados de 25 ventanas del fold 0,
+        # los puntos por voxel van (percentiles 10/25/50/75/90/99):
+        #     2 / 7 / 20 / 62 / 202 / 1.711     maximo 5.395
+        # El 6,6 % tiene un solo punto y el 67,5 % tiene mas de diez. Con
+        # ocupacion binaria un voxel con 1 punto y otro con 5.395 valen lo mismo:
+        # se colapsan cuatro ordenes de magnitud a un bit. La escena entera que ve
+        # el modelo son 300 voxeles x 5 frames = 1.500 bits (trampa 32).
+        #
+        # LA ESCALA ES LOGARITMICA Y FIJA. log1p(n) / log1p(DENS_REF), recortado a
+        # 1. Logaritmica porque el rango abarca cuatro ordenes y una escala lineal
+        # dejaria a casi todos los voxeles pegados al cero. FIJA —no normalizada
+        # por muestra— porque dividir por el maximo de cada ventana haria que el
+        # mismo voxel valiera distinto segun que mas haya en la escena, y el
+        # modelo no podria aprender una escala estable.
+        #
+        # DENS_REF = 1000 deja: 1 punto -> 0,10 · 20 -> 0,44 · 202 -> 0,77 ·
+        # 1.711 -> 1,0 (recortado). Solo satura el ~1 % superior.
+        #
+        # NO CAMBIA LA FORMA de los tokens: sigue siendo (num_voxels,
+        # history_len), asi que patch_embed = Linear(history_len, embed_dim) y los
+        # checkpoints del encoder siguen cargando. Lo unico que cambia es el VALOR
+        # de cada token: de un bit a un continuo en [0, 1].
+        #
+        # OJO: el MAE fue pre-entrenado sobre entradas BINARIAS. Darle densidades
+        # continuas es un cambio de distribucion de entrada y puede degradar
+        # aunque la informacion sea mayor. Si no mejora, esa es la primera
+        # hipotesis a descartar re-pre-entrenando con densidad (20 min por fold).
+        #
+        # DEFAULT False: los experimentos 15-28 se midieron con ocupacion binaria.
+        self.densidad = densidad
+        self.DENS_REF = 1000.0
         self.norm_scale = norm_scale
         self.eval_windows = eval_windows   # antes de super(): full_init() ya llama load_data_list
         self.sequence_len = sequence_len
@@ -278,7 +312,16 @@ class TrajectoryDataset(BaseDataset):
             ((pts[:, 2] - self.spatial_range[4]) / self.voxel_res).astype(np.int32),
             0, self.grid_z - 1
         )
-        grid[ix, iy, iz] = 1.0
+        if not self.densidad:
+            grid[ix, iy, iz] = 1.0
+            return grid
+        # np.add.at acumula con indices repetidos; grid[ix,iy,iz] += 1 NO lo hace
+        # (asigna una sola vez por posicion) y dejaria todos los voxeles en 1,
+        # o sea el comportamiento binario disfrazado de densidad.
+        np.add.at(grid, (ix, iy, iz), 1.0)
+        np.log1p(grid, out=grid)
+        grid /= np.log1p(self.DENS_REF)
+        np.clip(grid, 0.0, 1.0, out=grid)
         return grid
 
     def _augment(self, relative, voxel_sequences):

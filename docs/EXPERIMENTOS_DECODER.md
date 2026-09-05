@@ -2165,6 +2165,42 @@ Efecto de la escena (`gated − gate0`), fold a fold, en las dos geometrías:
 Y el efecto absoluto de la escena pasa de **+0,274 (perjudica, 0/5 folds)** a
 **−0,015 (neutro, p=0,87, 3/5 folds)**.
 
+### CORRECCION 05/09 — la replica con 8 semillas NO sostiene la significancia
+
+El p=0,0475 estaba justo bajo el umbral, así que se replicó con las semillas 4-7
+(`run_objcentrico8.sh`, CSV `work_dirs/objcentrico8/`). Con **n = 5 folds × 8
+semillas**:
+
+| fold | ego-céntrico | objeto-céntrico | mejora |
+|---|---|---|---|
+| 0 | +0,839 | +0,300 | −0,539 |
+| 1 | +0,283 | −0,150 | −0,433 |
+| 2 | +0,047 | +0,001 | −0,046 |
+| 3 | +0,209 | +0,169 | −0,040 |
+| 4 | +0,003 | −0,122 | −0,125 |
+| **media** | **+0,276** | **+0,040** | **−0,237** |
+
+| | 4 semillas | 8 semillas |
+|---|---|---|
+| mejora | −0,290 ± 0,229 | **−0,237 ± 0,233** |
+| p | **0,0475** | **0,0860** |
+| folds a favor | 5/5 | **5/5** |
+
+**El efecto se encogió un 18 % y perdió la significancia.** El resultado de este
+experimento es por lo tanto una **tendencia consistente SIN significancia**, no un
+hallazgo establecido, y así debe citarse.
+
+Lo que sigue sosteniéndolo: **5/5 folds** en las dos mediciones (por azar, 1/32 ≈
+0,03), un efecto que casi no se movió en magnitud, y un mecanismo **medido** —el
+objeto pasa del 11 % al 100 % dentro de la caja— y no ajustado tras ver los datos.
+
+Lo que se debilita: con n=5 folds y esta dispersión, **ningún efecto de este tamaño
+puede alcanzar significancia**. El límite es el número de folds, no el de semillas;
+más semillas no lo van a resolver.
+
+Y el efecto absoluto de la escena pasa de −0,015 a **+0,040** (p=0,67, 2/5 folds):
+la conclusión de fondo no cambia — **la escena dejó de perjudicar, pero no aporta**.
+
 ### Lo que se concluye, y lo que no
 
 **Sí:** la escena LiDAR pasó de **perjudicar** a ser **neutra**, con los cinco folds
@@ -2187,10 +2223,10 @@ contenía al objeto. La pregunta central recién ahora está bien planteada.
 
 ### Salvedades
 
-1. **p=0,0475 está justo bajo el umbral, con n=5 folds.** Este proyecto ya vio dos
-   veces un efecto así darse vuelta al validarlo. Lo que da confianza no es la p
-   sino los 5/5 folds y el mecanismo medido. **Replicar con 8 semillas antes de
-   tratarlo como establecido.**
+1. **p=0,0475 no sobrevivió a la réplica.** Con 8 semillas da p=0,086 (ver la
+   corrección arriba). La salvedad que se escribió acá el 04/09 —"replicar antes de
+   tratarlo como establecido"— resultó justificada: el efecto se encogió un 18 %.
+   Se cita como tendencia consistente (5/5 folds), nunca como resultado significativo.
 2. **El encoder MAE sigue siendo ego-céntrico.** `LidarSequenceDataset` no conoce
    los objetos, así que centrar el pre-entrenamiento es un cambio aparte. Hay
    desajuste de dominio, y juega EN CONTRA: el resultado se obtuvo a pesar de él.

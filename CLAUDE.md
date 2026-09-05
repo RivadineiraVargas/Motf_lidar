@@ -38,9 +38,11 @@ modificar.
 **Estado al 04/09/2026.** El 04/09 se midió que la caja de vóxeles estaba centrada
 en el EGO y que **el objeto a predecir estaba dentro en solo el 11 % de las
 ventanas** (mediana: 32,7 m del ego). Centrarla en el objeto (exp. 28) mejora
-**−0,290, p=0,047, 5/5 folds** y lleva la escena de **perjudicar** (+0,274, 0/5) a
-**neutra** (−0,015, p=0,87). Es el primer resultado significativo a favor de la
-escena en 28 experimentos.
+**−0,237 con 5/5 folds, pero p=0,086** sobre 8 semillas —con 4 daba p=0,047 y la
+réplica se lo llevó puesto—, y lleva la escena de **perjudicar** (+0,274, 0/5) a
+**neutra** (+0,040, p=0,67). Es una **tendencia consistente, no un resultado
+significativo**: con n=5 folds y esta dispersión, ningún efecto de este tamaño
+puede alcanzarla.
 
 **Consecuencia:** los negativos anteriores —la escena no aporta (exp. 19-20), la
 capacidad (p=0,102), la historia completa (exp. 22), la reconstrucción no predice el
