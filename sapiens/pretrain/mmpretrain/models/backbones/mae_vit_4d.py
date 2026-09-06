@@ -41,8 +41,26 @@ class MAEViT4D(MAEViT):
             nn.init.zeros_(self.patch_embed.bias)
 
     def _ensure_pos_embed(self, num_tokens: int, device: torch.device):
-        """Cria pos_embed apenas uma vez se num_tokens não era conhecido no __init__."""
-        if self.pos_embed is None or self.pos_embed.shape[1] != num_tokens:
+        """Crea el pos_embed la primera vez, si num_tokens no se conocía en __init__.
+
+        NO REEMPLAZA UNO EXISTENTE. Antes lo hacía —bastaba con que el tamaño no
+        coincidiera— y eso tenía dos consecuencias, las dos silenciosas:
+
+          1. El pos_embed ENTRENADO se tiraba y se reemplazaba por ruido
+             (trunc_normal). El entrenamiento seguía y daba numeros plausibles.
+          2. El Parameter nuevo nacía con requires_grad=True, asi que el freeze de
+             `freeze_encoder` —que se aplica UNA vez en __init__— ya no lo
+             alcanzaba: el encoder "congelado" pasaba a tener un tensor entrenable.
+
+        Medido: con pos_embed (1,128,1024) congelado y un forward de 660 tokens,
+        quedaba (1,660,1024) con requires_grad=True y 1 parámetro entrenable, sin
+        lanzar nada. Cualquier caída de ADE se habría atribuido a la
+        representación en vez de al pos_embed perdido.
+
+        El desajuste solo puede venir de un config mal armado —el dataset produce
+        N tokens y el modelo declara otro—, y ahí lo correcto es frenar.
+        """
+        if self.pos_embed is None:
             # Registrar como Parameter corretamente — NÃO usar .to() depois
             self.pos_embed = nn.Parameter(
                 nn.init.trunc_normal_(
@@ -50,6 +68,14 @@ class MAEViT4D(MAEViT):
                     std=0.02
                 )
             )
+        elif self.pos_embed.shape[1] != num_tokens:
+            raise ValueError(
+                f'pos_embed declarado para {self.pos_embed.shape[1]} tokens pero '
+                f'el dataset entregó {num_tokens}. El modelo y el dataset tienen '
+                f'que declarar la MISMA tokenización: revisar num_tokens del '
+                f'modelo contra az_stride/range_w/patch del dataset (range-view) '
+                f'o voxel_res/spatial_range (vóxeles). Reemplazar el pos_embed '
+                f'acá destruiría el que vino del checkpoint y lo descongelaría.')
 
     def random_masking(self, x, mask_ratio):
         N, L, D = x.shape
