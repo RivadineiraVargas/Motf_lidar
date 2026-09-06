@@ -2255,3 +2255,91 @@ el encoder es el único medido y funciona (exp. 21). Los otros dos no se tocaron
 Esto además reinterpreta el exp. 27: **reconstruir ocupación binaria bien no exige
 codificar nada útil para predecir movimiento**. El objetivo del MAE puede estar
 desalineado con la tarea, que es distinto de que el encoder sea malo.
+
+---
+
+## Experimento 29: enriquecer la representación de entrada no cambia nada
+
+**Fecha:** 2026-09-05 · **Rama:** `decoder/multimodal-wta`
+**Script:** `run_densidad.sh` · **CSV:** `work_dirs/densidad/densidad_results.csv`
+**n = 5 folds × 8 semillas**, pareado por (fold, semilla); test entre folds con n=5.
+El brazo binario (`gated_obj`) se reusa de `work_dirs/objcentrico{,8}`: mismo config,
+mismas semillas.
+
+### Por qué
+
+De los tres eslabones —representación de entrada, encoder, consumo en el decoder—
+el encoder es el **único medido y funciona** (exp. 21: generaliza, 43,5 % mejor que
+trivial en escenas retenidas). Los otros dos no se habían tocado en 28 experimentos.
+
+Y la representación estaba medida como muy pobre (trampa 32): **300 vóxeles × 5
+frames de ocupación binaria = 1.500 bits**. Sobre 2.230 vóxeles ocupados del fold 0,
+los puntos por vóxel van (percentiles 10/25/50/75/90/99):
+
+| 2 | 7 | 20 | 62 | 202 | **1.711** | máximo **5.395** |
+|---|---|---|---|---|---|---|
+
+El 6,6 % tiene un solo punto y el 67,5 % más de diez. **Un vóxel con 1 punto y otro
+con 5.395 valían exactamente lo mismo: 1,0** — cuatro órdenes de magnitud colapsados
+a un bit, y ~6.345 puntos LiDAR comprimidos a 1.500 bits.
+
+### El cambio
+
+`densidad=True`: el vóxel guarda `log1p(n) / log1p(1000)`, recortado a 1.
+
+**Logarítmica** porque el rango abarca cuatro órdenes y una escala lineal dejaría
+casi todos los vóxeles pegados al cero. **Fija y no normalizada por muestra**, porque
+dividir por el máximo de cada ventana haría que el mismo vóxel valiera distinto según
+qué más haya en la escena, y el modelo no podría aprender una escala estable.
+
+**No cambia la forma de los tokens** —sigue siendo (300, 5)—, así que
+`patch_embed = Linear(history_len, embed_dim)` no se toca y los checkpoints del
+encoder siguen cargando. Por eso se pudo medir sin re-pre-entrenar el MAE.
+
+Verificado antes de correr: el default sigue binario, los vóxeles ocupados coinciden
+**100 %** con el binario, la trayectoria no cambia, y se pasa de **1 valor único a
+572 distintos** con solo el 1,1 % saturando.
+
+### Resultado
+
+| pregunta | efecto | p | folds |
+|---|---|---|---|
+| ¿aporta la densidad? (`gated_dens` vs `gated_obj`) | **−0,016 ± 0,101** | 0,74 | 3/5 |
+| ¿aporta la escena, con densidad? (vs `gate0_obj`) | **+0,023 ± 0,251** | 0,84 | 3/5 |
+
+Por fold: +0,099 / +0,058 / −0,154 / −0,009 / −0,061. Ruido alrededor de cero, sin
+dirección.
+
+**Y el gate cierra igual: 0,0027**, contra 0,0030 del binario. Le dimos al modelo una
+escena con 572 valores distintos en vez de 2 y **la apagó exactamente igual**.
+
+### Lo que se concluye
+
+**La pobreza de la representación de entrada NO era el cuello.** Multiplicar por
+cuatro órdenes de magnitud la información de cada vóxel no movió el ADE ni un poco,
+ni en una dirección ni en la otra.
+
+Es un negativo limpio: no es que empeore por un cambio de distribución, es que **da
+exactamente lo mismo**.
+
+### El control que faltaba, y por qué
+
+Queda una explicación alternativa: el encoder venía pre-entrenado **mil épocas sobre
+entradas binarias**, así que un valor de 0,44 es algo que nunca vio. Puede que la
+información esté ahí y el encoder no sepa leerla.
+
+Sin descartar eso, "la densidad no sirve" queda con una puerta abierta. Lo cierra el
+**experimento 30** (`run_mae_densidad.sh`), que re-pre-entrena los cinco encoders con
+densidad y vuelve a medir.
+
+**Riesgo que hubo que resolver:** el MAE usa `LidarSequenceDataset`, que tiene **su
+propia** voxelización. Copiar la fórmula y que las dos divergieran haría que el
+encoder aprendiera una escala y el decoder le diera otra — sin ningún error visible,
+solo peores números. Se resolvió con una **función compartida**
+(`aplicar_densidad()` en `trajectory_dataset.py`) que ambos importan, verificando que
+1 / 20 / 202 / 1.711 puntos dan idénticos 0,100 / 0,441 / 0,769 / 1,000 en los dos.
+
+**Expectativa dicha de antemano:** el exp. 27 midió que la calidad del encoder no
+predice el ADE (r=+0,34). Si mejorar mucho el encoder no movía la predicción,
+adaptarlo a los grises probablemente tampoco. El exp. 30 se corre para **cerrar la
+hipótesis**, no porque se espere que funcione.

@@ -531,6 +531,13 @@ posteriores.**
     el único medido y funciona (exp. 21); los otros dos no se tocaron en 28
     experimentos.
 
+    **Medido en el exp. 29: la pobreza de la entrada NO era el cuello.** Pasar de
+    ocupación binaria a densidad continua —de 1 valor por vóxel a 572, cuatro
+    órdenes de magnitud más de información— dio **−0,016 ± 0,101 (p=0,74, 3/5
+    folds)**: exactamente lo mismo, ni mejor ni peor. Y el gate cerró igual (0,0027
+    contra 0,0030). Queda sin tocar el tercer eslabón: el consumo en el decoder,
+    **una sola query** de cross-attention comprimida a 64 dims.
+
 ---
 
 ## El hueco de reproducibilidad

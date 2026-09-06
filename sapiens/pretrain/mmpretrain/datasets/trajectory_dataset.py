@@ -6,6 +6,32 @@ from .base_dataset import BaseDataset
 from mmpretrain.registry import DATASETS
 
 
+# Referencia de la escala de densidad. Elegida con los percentiles medidos sobre
+# 2.230 voxeles ocupados del fold 0: los puntos por voxel van 2/7/20/62/202/1.711
+# (p10..p99) con maximo 5.395. Con DENS_REF=1000: 1 punto -> 0,10 · 20 -> 0,44 ·
+# 202 -> 0,77 · 1.711 -> 1,0 (recortado). Satura solo el ~1 % superior.
+DENS_REF = 1000.0
+
+
+def aplicar_densidad(grid, ix, iy, iz, dens_ref=DENS_REF):
+    """Llena `grid` con log1p(n_puntos)/log1p(dens_ref), recortado a [0, 1].
+
+    COMPARTIDA A PROPOSITO entre TrajectoryDataset (decoder) y
+    LidarSequenceDataset (pre-entrenamiento del MAE). Si cada uno tuviera su
+    copia y una cambiara, el encoder aprenderia una escala y el decoder le daria
+    otra — sin ningun error visible, solo peores numeros.
+
+    np.add.at y no `grid[ix,iy,iz] += 1`: la segunda NO acumula con indices
+    repetidos (asigna una sola vez por posicion) y dejaria todos los voxeles en
+    1, o sea el comportamiento binario disfrazado de densidad.
+    """
+    np.add.at(grid, (ix, iy, iz), 1.0)
+    np.log1p(grid, out=grid)
+    grid /= np.log1p(dens_ref)
+    np.clip(grid, 0.0, 1.0, out=grid)
+    return grid
+
+
 @DATASETS.register_module()
 class TrajectoryDataset(BaseDataset):
 
@@ -83,7 +109,7 @@ class TrajectoryDataset(BaseDataset):
         #
         # DEFAULT False: los experimentos 15-28 se midieron con ocupacion binaria.
         self.densidad = densidad
-        self.DENS_REF = 1000.0
+        self.DENS_REF = DENS_REF
         self.norm_scale = norm_scale
         self.eval_windows = eval_windows   # antes de super(): full_init() ya llama load_data_list
         self.sequence_len = sequence_len
@@ -315,14 +341,7 @@ class TrajectoryDataset(BaseDataset):
         if not self.densidad:
             grid[ix, iy, iz] = 1.0
             return grid
-        # np.add.at acumula con indices repetidos; grid[ix,iy,iz] += 1 NO lo hace
-        # (asigna una sola vez por posicion) y dejaria todos los voxeles en 1,
-        # o sea el comportamiento binario disfrazado de densidad.
-        np.add.at(grid, (ix, iy, iz), 1.0)
-        np.log1p(grid, out=grid)
-        grid /= np.log1p(self.DENS_REF)
-        np.clip(grid, 0.0, 1.0, out=grid)
-        return grid
+        return aplicar_densidad(grid, ix, iy, iz, self.DENS_REF)
 
     def _augment(self, relative, voxel_sequences):
         """Rotación aleatoria 0/90/180/270° + flip opcional en plano XY.

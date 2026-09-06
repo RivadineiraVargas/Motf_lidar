@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from .base_dataset import BaseDataset
 from mmpretrain.registry import DATASETS
+from .trajectory_dataset import DENS_REF, aplicar_densidad
 
 
 @DATASETS.register_module()
@@ -15,6 +16,7 @@ class LidarSequenceDataset(BaseDataset):
                  ann_file='',
                  sequence_len=10,
                  history_len=5,          # corrigido: default 5, não 100
+                 densidad=False,         # ver aplicar_densidad() en trajectory_dataset
                  max_windows=1,          # >1 = varias ventanas por escena
                  geo_target=False,       # True = objetivo centroide (GeoMAE)
                  voxel_res=0.5,
@@ -30,6 +32,12 @@ class LidarSequenceDataset(BaseDataset):
         self.sequence_len = sequence_len
         self.history_len = history_len
         self.max_windows = max_windows
+        # densidad: MISMA escala que TrajectoryDataset, via la funcion compartida.
+        # Es imprescindible que coincidan: el MAE se pre-entrena con este dataset
+        # y el decoder consume el encoder resultante con el otro. Si las escalas
+        # divergieran, el encoder aprenderia una distribucion y recibiria otra —
+        # sin error visible, solo peores numeros.
+        self.densidad = densidad
         self.geo_target = geo_target
         self.voxel_res = voxel_res
         self.spatial_range = spatial_range
@@ -122,8 +130,10 @@ class LidarSequenceDataset(BaseDataset):
         iz = np.clip(iz, 0, self.grid_z - 1)
 
         # Indexação vetorizada — muito mais rápido que loop
-        grid[ix, iy, iz] = 1.0
-        return grid
+        if not self.densidad:
+            grid[ix, iy, iz] = 1.0
+            return grid
+        return aplicar_densidad(grid, ix, iy, iz, DENS_REF)
 
     def __getitem__(self, idx):
         item = self.data_list[idx]
