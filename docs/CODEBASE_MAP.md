@@ -1,6 +1,6 @@
 ---
-last_mapped: 2026-09-03T10:59:06Z
-total_files: 185
+last_mapped: 2026-09-06T10:36:33Z
+total_files: 197
 total_tokens: 192000
 ---
 
@@ -234,8 +234,8 @@ byte a byte salvo el `work_dir`.
 
 | script | qué hace |
 |---|---|
-| `eval_fase1_seeds.py` | **el evaluador**. Separa móviles de parados, agrega por escena. `--poblacion-hist N` deja a dos modelos de historia distinta midiendo sobre los mismos objetos y el mismo futuro — sin eso, cambiar `history_len` cambia la población y los ADE no se comparan |
-| `agregar_resultados.py` | **el agregador**: el único camino a un número publicable. `--peso {objetos,escena}`, `--poblacion {todos,moviles}`, `--metrica {ade,fde}`, `--comparar A:B`, `--por-fold`. Deduplica, verifica cobertura pareja y tolera celdas vacías |
+| `eval_fase1_seeds.py` | **el evaluador**. Una fila por (fold, variante, semilla, escena); **20 columnas**. Separa móviles de parados y **vehículos de no-vehículos** (`n_veh`, `ade_veh`…), infiriendo el tipo del tamaño de la caja porque la extracción no guardó `object_type`. `--poblacion-hist N` deja a dos modelos de historia distinta midiendo sobre los mismos objetos y el mismo futuro — sin eso, cambiar `history_len` cambia la población y los ADE no se comparan |
+| `agregar_resultados.py` | **el agregador**: el único camino a un número publicable. `--peso {objetos,escena}`, `--poblacion {todos,moviles,vehiculos}`, `--metrica {ade,fde,minade,minfde}`, `--comparar A:B`, `--por-fold`. Deduplica, verifica cobertura pareja y tolera celdas vacías. Arma el nombre de columna por convención `{metrica}_{poblacion}`, así que sumar una población o una métrica no pide código nuevo — solo que el CSV traiga la columna; si no está, aborta listando las que hay |
 | `run_fase1_cv.sh` | CV de 5 folds × 8 semillas × 3 variantes |
 | `run_noclip.sh` | fold 0 sin recorte del objetivo |
 | `run_geo.sh` | encoder con objetivo geométrico |
@@ -243,11 +243,80 @@ byte a byte salvo el `work_dir`.
 | `run_noclip_cv.sh` | **la CV de los 5 folds** (0-4) en el protocolo vigente. Corrida y cerrada el 31/08 |
 | `run_gateinit.sh` | el control del **arranque del gate** (`gate_init=0.05`): 5 folds × 8 semillas, reusa los encoders de la CV |
 | `run_hist11.sh` | **la historia completa (1,1 s)**: baseline con `history_len=11` contra el de 5, 5 folds × 8 semillas. Re-evalúa `base5` porque la población cambia |
+| `run_multimodal.sh` | **k=6 con winner-takes-all** (exp. 24). El brazo `gate0_k6` se canceló a mitad: no hay números suyos |
+| `run_clsweight.sh` | barrido de `cls_weight` (0,01/0,05/0,2 × 2 folds × 4 semillas). **Es un barrido para ELEGIR, no un resultado** |
+| `run_clsweight_val.sh` | valida el ganador del barrido en **folds 2-4, que no participaron de la elección** (exp. 25). Único con `corridas()`, que varía las semillas según el fold |
+| `run_curva_mae.sh` | **la curva del MAE de vóxeles** (exp. 26): re-pre-entrena con `interval=10` y `save_optimizer=False` (3,76 GB → 1,25 GB por checkpoint). Único con **guard de disco** (exige 200 GB) y con guard contra re-medir después de podar. Poda al final dejando el mejor y el 1000 |
+| `run_recon_ade.sh` | **¿la reconstrucción predice el ADE?** (exp. 27). Único que usa `load_from=$ENC` con un encoder extraído aparte y `use_gate=False` — sin eso el gate se cierra y anula la diferencia entre encoders |
+| `run_objcentrico.sh` | **la caja centrada en el objeto** (exp. 28), 5 folds × 4 semillas × 2 variantes |
+| `run_objcentrico8.sh` | réplica del 28 con semillas 4-7. **CSV aparte a propósito**, para no alterar un resultado ya publicado con n=4 |
+| `run_reeval_tipo.sh` | desglose por tipo de agente **sin re-entrenar**: reusa los 40 checkpoints del exp. 28. Único que no entrena nada. Su cabecera se marca a sí misma como **post hoc** |
+| `run_densidad.sh` | **densidad en vez de ocupación binaria** (exp. 29), 8 semillas desde el arranque. Solo entrena un brazo: el binario se reusa de `objcentrico{,8}` |
+| `run_mae_densidad.sh` | **re-pre-entrena el MAE con densidad** y vuelve a medir (exp. 30). Único de dos etapas: encoders (1,7 h) y después decoder (8,3 h) |
+| `preparar_auditoria.sh` | **no es un experimento**: genera una copia del proyecto sin `docs/`, sin `CLAUDE.md` y **sin historial de git** —que es más revelador que `CLAUDE.md`— para auditoría externa. Ver `docs/REVISION_INDEPENDIENTE.md` |
+| `curva_mae_voxel.py` | mide la curva de reconstrucción sobre todos los checkpoints de un fold. **`--mascaras 4` no es arbitrario**: reproduce el valor de la adenda del exp. 23; con 8 da otro número y rompe la comparabilidad. Trae guard antiborrado del CSV |
+| `recon_dos_ckpts.py` | re-mide los dos encoders de cada fold con **máscaras frescas** (semillas 100-103), porque la "mejor época" se eligió con las 0-3 y su ventaja está sesgada. Cuantificó un encogimiento del **37 %** por regresión a la media |
 | `curva_overfit10.py` | **la curva de generalización de la prueba de 10 sweeps**: recorre todos los checkpoints y mide la pérdida enmascarada en train / sweep retenido de la misma escena / 5 escenas nunca vistas, con máscaras pareadas. El producto es saber DÓNDE PARAR |
 | `diagnostico_encoder_mae.py` | **¿el encoder memorizó?** Pérdida de reconstrucción en 3 poblaciones (ventanas vistas / ventanas nuevas de escenas vistas / escenas retenidas) con máscaras pareadas, contra el modelo sin entrenar y contra predecir 0. No entrena |
 | `extract_mae_encoder.py` | renombra `backbone.*`→`encoder.*` entre pre-train y decoder |
 | `viz_un_auto.py` | trayectoria de un objeto, gate0 vs gated |
 | `viz_rect_reconstruction.py` | reconstrucción del MAE, genérico por CLI |
+
+### El molde de los `run_*.sh` — cuatro piezas que se repiten
+
+Los once scripts de experimento comparten una estructura. Conocerla ahorra leer cada
+uno entero, y **desviarse de ella sin querer es de dónde salieron varios bugs**.
+
+**1. `ya_evaluado()`** — idéntica en los ocho que evalúan (todos menos
+`run_curva_mae.sh`, que mide una curva y no brazos):
+
+```bash
+ya_evaluado() {   # $1=csv $2=fold $3=variante $4=semilla $5=nº de escenas
+    [ -f "$1" ] || return 1
+    [ "${5:-1}" -gt 0 ] || return 1
+    local n; n=$(grep -c "^$2,$3,$4," "$1")
+    [ "$n" -ge "$5" ]
+}
+```
+
+**Cuenta filas, no comprueba existencia**, porque el evaluador escribe **una fila por
+escena** y una evaluación cortada a la mitad dejaría medio resultado que parecería
+completo. El `^` ancla el inicio de línea: sin él, el fold 1 haría match dentro del
+11. Y el guard `[ "${5:-1}" -gt 0 ]` cubre el caso de `VAL` vacío, que sin él daría
+`[ n -ge 0 ]` = verdadero y saltearía todo en silencio.
+
+**2. Las escenas de validación se parsean del config con regex**, no importando el
+módulo: busca `val RETENIDA del fold N: [...]` y saca los hex de 16 caracteres.
+Siempre seguido de `[ -n "$VAL" ] || continue` y `NV=$(echo $VAL | wc -w)`.
+
+**3. Las `--cfg-options` van al entrenamiento Y a la evaluación**, guardadas en una
+variable compartida (`$OBJ`, `$DS`, `$OPT`) para que no puedan divergir. Varios
+scripts llevan un comentario "OJO" en ese punto: **entrenar con una representación y
+medir con otra es el error más repetido de este repo**, y no produce ningún error
+visible.
+
+**4. Guard de reanudación**: `[ -f "$WD/epoch_100.pth" ] || entrenar`. Los scripts
+recientes agregan `max_keep_ckpts=1`, porque el default (2) deja un `epoch_90` que
+nadie mira — fueron 48 GB de basura en el exp. 28 que hubo que borrar después.
+
+### Las excepciones, que son las que importan
+
+| script | en qué se sale del molde |
+|---|---|
+| `run_curva_mae.sh` | único con guard de **disco**; único sin `ya_evaluado`; toma los folds por argumento en vez de recorrer 0-4; **poda checkpoints al terminar** |
+| `run_reeval_tipo.sh` | **no entrena nada**: invierte el guard y aborta si falta el checkpoint |
+| `run_recon_ade.sh` | `use_gate=False` en vez de gate aprendible — sin eso el gate cierra y anula lo que el experimento quiere medir |
+| `run_mae_densidad.sh` | dos etapas en un script: encoders y después decoder |
+| `run_objcentrico8.sh` | escribe **CSV aparte** para no alterar un resultado ya publicado con menos semillas |
+
+### Reusar brazos en vez de re-entrenarlos
+
+Patrón deliberado y repetido: cuando un brazo ya se midió con el mismo config y las
+mismas semillas, **no se vuelve a correr** — el agregador une los CSV y el pareo por
+(fold, semilla) sale igual. El exp. 29 entrena un solo brazo y toma el binario de
+`objcentrico{,8}`; el exp. 25 toma el `baseline_k1` de `multimodal`; el
+`run_reeval_tipo.sh` reusa 95 GB de cómputo sin entrenar nada. Ahorra la mitad o más
+del costo en casi todos los experimentos recientes.
 | `export_decoder_mini_global.py` | `predictions_global.txt` + GIFs para el visor |
 
 **Vigentes pero del track congelado** (decoder_mini): `train_decoder_mini.py`,

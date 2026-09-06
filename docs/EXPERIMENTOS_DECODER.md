@@ -2343,3 +2343,105 @@ solo peores números. Se resolvió con una **función compartida**
 predice el ADE (r=+0,34). Si mejorar mucho el encoder no movía la predicción,
 adaptarlo a los grises probablemente tampoco. El exp. 30 se corre para **cerrar la
 hipótesis**, no porque se espere que funcione.
+
+---
+
+## Experimento 30: un encoder 5× mejor da exactamente la misma predicción
+
+**Fecha:** 2026-09-06 · **Rama:** `decoder/multimodal-wta`
+**Script:** `run_mae_densidad.sh` · **CSV:** `work_dirs/maedens/maedens_results.csv`
+**n = 5 folds × 8 semillas**, pareado por (fold, semilla); test entre folds con n=5.
+
+### Por qué
+
+El exp. 29 midió que pasar de ocupación binaria a densidad continua no cambia nada.
+Pero quedaba una explicación abierta: el encoder venía pre-entrenado **mil épocas
+sobre entradas binarias**, así que un valor de 0,44 es algo que nunca vio. Podía ser
+que la información estuviera ahí y el encoder no supiera leerla.
+
+Sin descartar eso, "la densidad no sirve" quedaba con una puerta abierta.
+
+### Diseño
+
+Dos etapas encadenadas. Primero re-pre-entrenar los cinco encoders MAE con
+`densidad=True` (20 min por fold). Después re-correr el decoder con densidad **y**
+esos encoders. Se compara contra `gated_dens` (exp. 29: densidad con encoder
+binario), que ya tenía 8 semillas medidas con el mismo config y las mismas semillas.
+
+**El riesgo que hubo que resolver:** el MAE usa `LidarSequenceDataset`, que tiene su
+**propia** voxelización. Copiar la fórmula y que las dos divergieran haría que el
+encoder aprendiera una escala y el decoder le diera otra — sin ningún error visible,
+solo peores números. Se resolvió con una **función compartida**
+(`aplicar_densidad()` en `trajectory_dataset.py`) que ambos importan, verificando que
+1 / 20 / 202 / 1.711 puntos dan idénticos 0,100 / 0,441 / 0,769 / 1,000 en los dos.
+
+### Control previo: los encoders SÍ aprendieron algo distinto
+
+Pérdida de reconstrucción del MAE en la época 1000:
+
+| fold | binario | densidad |
+|---|---|---|
+| 0 | 0,0952 | **0,0175** |
+| 1 | 0,0815 | **0,0488** |
+| 2 | 0,1121 | **0,0446** |
+
+**Entre 2 y 5 veces mejor.** Las pérdidas de arranque son casi idénticas (~1,25 vs
+~1,30), así que no es un artefacto de escala del objetivo. Sin este control, un
+resultado nulo podría venir de que el flag no llegó al pre-entrenamiento.
+
+### Resultado
+
+| pregunta | efecto | p | folds |
+|---|---|---|---|
+| ¿importaba el desajuste encoder/entrada? | **+0,006 ± 0,080** | 0,87 | 3/5 |
+| ¿con todo alineado, la escena aporta? | **+0,030 ± 0,246** | 0,80 | 3/5 |
+
+Por fold: −0,047 / −0,071 / −0,033 / **+0,070** / **+0,111**.
+
+Gate por fold: −0,0001 / +0,0031 / +0,0033 / +0,0036 / +0,0039. **Sigue cerrando.**
+
+### Lo que cierra
+
+**La hipótesis del desajuste queda descartada.** Un encoder que reconstruye la escena
+**2 a 5 veces mejor**, entrenado sobre una representación más rica, produce
+**exactamente la misma predicción**. Ya no se puede decir "el encoder no hablaba el
+mismo idioma que la entrada".
+
+Y refuerza el exp. 27 por una vía independiente: no es solo que la calidad del
+encoder no correlacione con el ADE (r=+0,34) sobre épocas del mismo entrenamiento;
+es que un encoder **genuinamente mucho mejor** no mueve la predicción.
+
+### La tercera vez en una semana, y la más convincente
+
+Con tres folds este experimento daba **−0,050 ± 0,019 · p=0,047 · 3/3 folds**, con la
+dispersión **más baja de todo el proyecto** (±0,019, diez veces menor de lo habitual).
+Los folds 3 y 4 lo dieron vuelta: quedó en +0,006 y p=0,87.
+
+Es el tercer efecto de la semana que parece sólido con parte de la muestra y se
+disuelve al completarla — después del `cls_weight=0,05` (exp. 25) y del p=0,0475
+(exp. 28). **Y fue el más convincente de los tres.**
+
+Lo que salvó la lectura no fue la estadística sino un argumento mecánico: **si el
+gate está cerrado en ~0,003, la escena apenas llega al decoder, así que un efecto de
+esa magnitud no puede venir de que la escena aporte.** Esa contradicción se marcó
+cuando el resultado todavía parecía bueno, y resultó ser la lectura correcta.
+
+**Regla que queda:** con n=5 folds, tres coincidiendo no significa casi nada —
+ni siquiera con la dispersión más baja que se haya visto.
+
+### El balance de los tres eslabones
+
+| eslabón | estado |
+|---|---|
+| representación de entrada | **descartado** (exp. 29): 4 órdenes de magnitud más de información, cero efecto |
+| encoder | **descartado** (exp. 21, 27, 30): funciona, y mejorarlo no cambia la predicción |
+| consumo en el decoder | **sin tocar en 30 experimentos** |
+
+Queda un solo sospechoso: la escena entra al decoder por **una sola query** de
+cross-attention comprimida a **64 dims** y concatenada con la historia. `scene_dim`
+es un parámetro del config, así que ampliarlo se prueba **sin tocar código**.
+
+**Expectativa, dicha de antemano:** el gate cierra a ~0,003 en todos los folds. Si el
+modelo apaga la escena, ampliar el canal por el que no pasa nada probablemente no
+cambie que no pase nada. El argumento a favor —que cierra *porque* el canal es
+estrecho— es circular y no está medido.
