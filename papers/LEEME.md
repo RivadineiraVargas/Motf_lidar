@@ -1,7 +1,8 @@
 # Papers de referencia
 
-Los cinco PDF que este proyecto cita en sus decisiones de diseño. Cada uno está
-acá porque **cambió algo concreto del código**, no como bibliografía general.
+Los PDF que este proyecto cita en sus decisiones de diseño. Casi todos están acá
+porque **cambiaron algo concreto del código**, no como bibliografía general. La
+excepción es el survey de Madjid, que sirve para ubicar el trabajo en el campo.
 
 | paper | qué nos aportó | dónde se ve |
 |---|---|---|
@@ -11,6 +12,13 @@ acá porque **cambió algo concreto del código**, no como bibliografía general
 | **JointMotion** (Wagner 2024) | no congelar el encoder: usar el pre-entrenamiento como *inicialización* | `finetune_blocks` en `trajectory_model_attn.py` |
 | **ReZero** (Bachlechner 2020) | un escalar residual iniciado en cero SÍ recibe gradiente; de ahí `gate_init=0,05` | experimento 20, trampa 4 del mapa |
 | **BEVTraj** (Kong 2025) | predicción sin mapa HD, sobre nuScenes (20 s de LiDAR continuo contra nuestros 1,1 s) | experimento 21; **sin estudiar a fondo** |
+| **Survey** (Madjid 2025) | ubica el nicho: de ~350 métodos, **solo 2 usan LiDAR crudo** y NINGUNO combina LiDAR crudo + auto-supervisión + predicción. Tampoco advierte sobre minADE | `docs/EXPERIMENTOS_DECODER.md`, sección tras la tabla de papers |
+
+**Cuidado con una cita del survey de Madjid.** La frase *"the shortage of
+self-supervised solutions"* NO es de esos autores: describe el survey de Teeti
+et al. [7] dentro de un párrafo que resume trabajos ajenos. Se detectó al
+verificar el PDF con `pdftotext`; la versión HTML entrega la frase sin el contexto
+de quién la dice. **Las citas que vayan a la tesis se verifican en el PDF.**
 
 **Pendiente de estudiar:** BEVTraj. Resuelve nuestro mismo problema y su elección
 de dataset podría importar más que cualquier arquitectura — ver "La ruta" en

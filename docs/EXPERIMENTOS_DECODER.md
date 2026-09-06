@@ -1260,6 +1260,56 @@ Repos completos clonados en `~/referencias/{sapiens_full,sapiens2}`.
 | BEVTraj (Kong 2025) | map-free iguala a métodos con mapa HD; su BEV es **supervisada por detección** |
 | GeoMAE (Tian 2023) | **+2,7 AP** cambiando el objetivo a targets geométricos; funciona sin datos extra |
 | JointMotion (Wagner 2024) | auto-supervisión para movimiento, pero **0 menciones de LiDAR** (polilíneas) |
+| Survey (Madjid 2025) | 350 métodos revisados. Ver abajo: es el que ubica el nicho |
+
+### Lo que dice el survey de Madjid 2025 (arXiv:2503.03262), verificado en el PDF
+
+Survey de ~350 métodos de predicción de trayectorias. No propone método; sirve para
+**ubicar el trabajo** y para tres observaciones concretas:
+
+**1. Solo DOS métodos de 350 usan LiDAR crudo como entrada al predictor** (sec. 2.2):
+
+| ref | trabajo | qué hace | por qué no es lo nuestro |
+|---|---|---|---|
+| [42] | Luo, Yang, Urtasun — *Fast and Furious* (CVPR 2018) | detección + seguimiento + predicción en una sola red, convoluciones 3D sobre nubes de puntos, 30 ms | **end-to-end supervisado**, sin auto-supervisión; su objetivo es evitar el error en cascada, no medir si la escena aporta |
+| [43] | Völz et al. | proyecta las nubes a 2D por coordenadas angulares (**range-view**) + CNN | **clasifica intenciones de peatones**, no predice trayectorias |
+
+Y da una razón del desuso que conviene citar:
+> *"Two limitations hinder the widespread adoption of LiDAR technology: its relatively
+> high cost and its accuracy in detecting pedestrians."*
+
+Lo segundo se conecta con algo medido acá: con vóxeles de 2 m **un peatón ocupa
+0,4 × 0,4** — menos de un vóxel (trampa 32). El survey lo señala como límite del
+sensor; nuestra resolución lo amplifica.
+
+**Ningún método de los 350 combina LiDAR crudo + auto-supervisión + predicción de
+trayectorias.** Ese es el nicho de MOTF.
+
+**2. La auto-supervisión está casi ausente del survey.** `self-supervised` aparece
+**3 veces en todo el PDF**, las tres en el mismo párrafo donde se resumen *otros*
+surveys. No cita Forecast-MAE, Traj-MAE, PreTraM ni SEPT; remite a una referencia
+externa diciendo que *"the specifics of SSL methods are out of the scope of this
+review"*.
+
+**OJO CON UNA CITA QUE NO ES DE ELLOS.** La frase *"the shortage of self-supervised
+solutions"* (línea 601 del PDF) describe el survey de **Teeti et al. [7]**, no una
+conclusión de Madjid et al.: el párrafo resume trabajos ajenos y el sujeto es "it",
+el survey de Teeti. Atribuirla a Madjid sería un error de atribución. Si se quiere
+esa cita, hay que ir a Teeti et al.
+
+Se detectó porque el HTML entrega la frase sin el contexto de quién la dice, y el
+PDF con `pdftotext` mostró el párrafo entero. **Toda cita que vaya a la tesis se
+verifica en el PDF, no en la versión HTML.**
+
+**3. El survey NO advierte sobre la limitación de minADE.** Define minADE_k como
+*"the L2 distance between the ground truth trajectory and the closest prediction out
+of k possible trajectories"* — correcto—, pero **no señala** que elegir el mejor de K
+modos *conociendo el futuro real* la vuelve un oráculo, ni que por eso no es
+comparable con el ADE de un modelo unimodal.
+
+Eso le da respaldo al experimento 24: el survey de referencia del campo, con 350
+métodos, no discute una limitación que acá se midió — reportar solo minADE mostraba
++24 % y +44 % sobre un modelo cuya predicción real empeoró (trampa 28).
 
 ### Experimento 17: objetivo geométrico — CERRADO, ver arriba
 
