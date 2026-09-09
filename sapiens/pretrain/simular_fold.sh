@@ -12,17 +12,44 @@
 #   - las escenas: las de VALIDACION del fold, nunca vistas en entrenamiento
 #
 # Uso:
+#   ./simular_fold.sh todos                    # LOS 5 FOLDS en un solo archivo
 #   ./simular_fold.sh 0                        # mejor semilla del fold 0, exp padk6
 #   ./simular_fold.sh 2 --semilla 5            # una semilla concreta
 #   ./simular_fold.sh 0 --variante pad0_k6     # el brazo de control
 #   ./simular_fold.sh 0 --exp initscale --variante base_pad64
 #   ./simular_fold.sh 0 --un-modo              # solo el mas probable (k>1)
 #
+# El modo `todos` concatena los cinco folds. Es legitimo porque sus escenas de
+# validacion son DISJUNTAS (2 cada uno, 10 en total, ninguna repetida): cada
+# escena queda predicha por el unico modelo que NO la vio en entrenamiento. Da
+# cobertura completa del dataset sin una sola prediccion contaminada.
+#
 # Despues: ./show_point_cloud ...   y en el visor  n/m  para pasar de auto en auto.
 set -euo pipefail
 cd /home/lcad/lidar_sweep_viewer/sapiens/pretrain
 
 FOLD=${1:-0}; shift || true
+
+# --- modo `todos`: los 5 folds concatenados -----------------------------------
+if [ "$FOLD" = "todos" ]; then
+    TMP=$(mktemp -d); DESTINO=/home/lcad/lidar_sweep_viewer/predictions_global.txt
+    # el --txt del usuario, si lo dio, se respeta
+    for a in "$@"; do [ "$PREV" = "--txt" ] && DESTINO=$a; PREV=$a; done
+    for F in 0 1 2 3 4; do
+        echo "######## FOLD $F ########"
+        "$0" "$F" "$@" --txt "$TMP/f$F.txt" || { echo "!!! fallo el fold $F"; exit 1; }
+    done
+    cat "$TMP"/f*.txt > "$DESTINO"
+    rm -rf "$TMP"
+    echo
+    echo "=== LOS 5 FOLDS -> $DESTINO ==="
+    awk '{print $1}' "$DESTINO" | sort -u | wc -l | xargs echo "  escenas:"
+    awk '{print $1"_"$2}' "$DESTINO" | sort -u | wc -l | xargs echo "  objetos:"
+    wc -l < "$DESTINO" | xargs echo "  puntos :"
+    echo
+    echo "Cada escena la predice el modelo que NO la vio (folds disjuntos)."
+    exit 0
+fi
 EXP=padk6; VARIANTE=pad64_k6; SEMILLA=mejor; MODOS=todos
 CFG_BASE=configs/sapiens_mae/lidar/noclip_base_fold
 TXT=/home/lcad/lidar_sweep_viewer/predictions_global.txt
