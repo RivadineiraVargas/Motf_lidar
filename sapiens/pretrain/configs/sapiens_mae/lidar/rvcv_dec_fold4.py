@@ -23,8 +23,8 @@ n_tokens     = 128
 tok_dim      = 16 * 16 * scene_frames    # 1280
 
 train_scenes = [
-    '2a81f5233075e987', '2e41fe6faf5cd2ea', '367b072edc9822ea', '394e61f27c2a1700',
-    '4014ae5bcda2726f', '41692b0ec7ff4123', '4a2ef30000d19d90', '4b60f9400a30ceaf',
+    '2a81f5233075e987', '2e41fe6faf5cd2ea', '367b072edc9822ea', '4014ae5bcda2726f',
+    '41692b0ec7ff4123', '4a2ef30000d19d90', '7e2f727866c69ea0', '82f90331a1dfe968',
 ]
 
 train_dataloader = dict(
@@ -87,4 +87,4 @@ default_hooks = dict(checkpoint=dict(interval=50, max_keep_ckpts=2),
                      logger=dict(interval=20))
 
 work_dir = './work_dirs/rvcv/dec_fold0'
-load_from = './work_dirs/mae_rv_nativo/enc_fold0.pth'
+load_from = './work_dirs/mae_rv_nativo/enc_fold4.pth'

@@ -1,7 +1,9 @@
-# mae_rangeview_pretrain.py — Pré-treino MAE sobre a RANGE-VIEW (track range-view).
+# mae_rangeview_fold4.py  (generado desde mae_rangeview_pretrain.py = fold 0) — Pré-treino MAE sobre a RANGE-VIEW (track range-view).
 # Cena = imagem de rango (64x512) empilhada em 5 frames, patchificada em 128 tokens
 # de dim 1280. O MAEViT4D é reusado: patch_embed = Linear(1280 -> embed_dim).
-# Mesmas 8 cenas de treino que o track de vóxels.
+# Fold 4: las MISMAS 8 escenas de train que f1cv_mae_fold4.py. Las 2 escenas
+# retenidas de este fold (394e61f27c2a1700, 4b60f9400a30ceaf) NO estan aca:
+# el encoder no puede ver lo que despues se evalua.
 _base_ = ['../../_base_/default_runtime.py']
 
 custom_imports = dict(
@@ -21,8 +23,8 @@ embed_dim    = 1024
 mask_ratio   = 0.75
 
 train_scenes = [
-    '2a81f5233075e987', '2e41fe6faf5cd2ea', '367b072edc9822ea', '394e61f27c2a1700',
-    '4014ae5bcda2726f', '41692b0ec7ff4123', '4a2ef30000d19d90', '4b60f9400a30ceaf',
+    '2a81f5233075e987', '2e41fe6faf5cd2ea', '367b072edc9822ea', '4014ae5bcda2726f',
+    '41692b0ec7ff4123', '4a2ef30000d19d90', '7e2f727866c69ea0', '82f90331a1dfe968',
 ]
 
 train_dataloader = dict(
