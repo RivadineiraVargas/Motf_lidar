@@ -2761,3 +2761,120 @@ respuesta no aguantó leer las dos clases en paralelo.
 **Regla que queda:** antes de llamar "resultado" a una diferencia entre dos modelos,
 listar **todas** sus diferencias, incluidas las que nadie eligió a propósito. El
 ancho de una capa que recibe ceros es una de ellas.
+
+---
+
+## Experimento 33: k=6 sobre el mejor resultado — el artefacto no sobrevive, y la multimodalidad empeora
+
+**Fecha:** 2026-09-09 · **Rama:** `decoder/multimodal-wta`
+**Script:** `run_padk6.sh` · **CSV:** `work_dirs/padk6/padk6_results.csv`
+**n = 5 folds × 8 semillas × 2 escenas** (160 filas), pareado por (fold, semilla);
+test entre folds con **n = 5**.
+
+### Por qué
+
+Tras el exp. 32, la configuración con menor ADE del proyecto es `base_pad64`: el MLP
+cinemático con 64 columnas de **ceros** pegadas a la entrada (ADE 2,776 contra 3,036
+del baseline pelado, −0,260 en 5/5 folds). Es un artefacto de la escala de
+inicialización, pero es el mejor número que hay y la pregunta de si mejora con
+multimodalidad es legítima.
+
+### Pre-registro
+
+Escrito en el encabezado del script antes de ver ningún número:
+
+- **PRINCIPAL:** `pad64_k6 − pad0_k6` en ADE de móviles. Ambos brazos a k=6, así que
+  el oráculo no interviene.
+  - **H_a** ≈ −0,260 → la ventaja de la inicialización sobrevive a k=6
+  - **H_b** ≈ 0 → era específica de k=1
+- **SECUNDARIA:** `pad64_k6 − base_pad64` (k=1). Predicción escrita de antemano
+  desde el baseline: **~+0,30, 0/5 folds**.
+- **minADE_6** se reporta pero **NO es titular**: los exps. 24 y 25 ya midieron que
+  mejora ~29 % con o sin nada. Si el titular fuera eso, no habríamos aprendido nada.
+
+`cls_weight` queda en el default 1,0 para parear exacto con `baseline_k6`.
+
+### Control de sanidad
+
+`pad0_k6` reproduce `baseline_k6` **bit a bit**: `max|dif| = 0,000000` en los 5
+folds, 8 semillas cada uno. `pad_dim=0` sigue siendo un no-op también con
+`num_modes=6`, así que no hay interacción entre los dos parámetros.
+
+### Resultado 1 — PRINCIPAL: **H_b**
+
+| | |
+|---|---|
+| `pad64_k6 − pad0_k6` | **−0,053 · t=−0,33 · p=0,758 · 3/5 folds** |
+| por fold | −0,408 · +0,110 · −0,257 · −0,199 · **+0,488** |
+| referencia a k=1 (exp. 32) | −0,260 · t=−2,43 · p=0,072 · 5/5 |
+
+**La ventaja de la escala de inicialización NO sobrevive a k=6.** Con 4 folds iba
+−0,189 y 3/4; el fold 4 la dio vuelta — el mismo fold que dio vuelta el exp. 31.
+
+Refuerza la retractación del exp. 32 en vez de matizarla: el mejor resultado del
+proyecto no solo era un artefacto, es un artefacto que **ni siquiera aguanta cambiar
+el número de modos**.
+
+### Resultado 2 — SECUNDARIA: lo más firme del experimento
+
+| | |
+|---|---|
+| `pad64_k6 − base_pad64` (ADE) | **+0,510 · t=5,45 · p=0,0055 · 0/5 folds** |
+| predicción escrita de antemano | ~+0,30, 0/5 |
+
+**k=6 empeora el ADE en los cinco folds, sin excepción**, y por casi el doble de lo
+que empeoraba el baseline pelado (+0,303). La predicción pre-registrada acertó en
+dirección y en unanimidad, y se quedó corta en magnitud.
+
+### minADE_6: +0,011 (3/5)
+
+Prácticamente cero, mientras el ADE difiere en −0,053. El ancho de la primera capa
+cambia **cuál** modo se elige, no **dónde** caen los seis. Por eso el efecto de la
+inicialización aparece en ADE y no en minADE.
+
+### El diagnóstico visual: por qué el minADE_k engaña
+
+El exportador `export_fase1_global.py` y `simular_fold.sh todos` llevaron los cinco
+folds al visor. Como las escenas de validación son **disjuntas**, cada una queda
+predicha por el único modelo que no la vio: **10 escenas, 265 objetos**, sin una sola
+predicción contaminada.
+
+Medido sobre esos 265 objetos:
+
+| | |
+|---|---|
+| dispersión media entre los 6 modos a 3 s | **16,72 m** (mediana 16,53) |
+| recorrido real del objeto en esos 3 s | **5,97 m** (mediana **0,00**) |
+| el abanico es | **2,8× lo que el objeto se mueve** |
+| ADE del modo más probable | 2,239 m |
+| minADE_6 (oráculo) | 1,654 m (**−26,1 %**) |
+
+Los seis modos **no son seis futuros plausibles**: son seis tiros. Y la mediana de
+recorrido es **0,00 m** porque la mitad de los objetos están **detenidos** — para un
+auto estacionado, seis hipótesis separadas 16 m no son multimodalidad.
+
+El −26,1 % coincide con el −29 % medido en los exps. 24 y 25 por vía independiente.
+
+**Ejemplo en `docs/figuras/k6_caja_y_modos.png`** — objeto 1781 de
+`4b60f9400a30ceaf`, 17,2 m de recorrido, a 7,6 m del ego:
+
+| modo | ADE | error final |
+|---|---|---|
+| más probable | **0,919 m** | 1,35 m |
+| alternativo 1 | 1,516 | 3,37 |
+| alternativo 3 | 4,143 | 10,11 |
+| alternativo 4 | 4,982 | 15,17 |
+| alternativo 5 | 5,619 | **19,02** |
+| alternativo 2 | 5,789 | 14,08 |
+
+Acá el modelo **eligió bien** —el más probable es el mejor de los seis— así que el
+minADE_6 no ganaría nada. **La ganancia del oráculo viene de los casos donde el
+modelo elige mal.** No premia entender la escena; premia haber tirado seis veces.
+
+### Lo que cierra
+
+La retractación del exp. 32 queda firme, y aparece el resultado más sólido de la
+semana: **pasar a la métrica multimodal de la literatura empeora la predicción real
+de forma unánime (0/5 folds, p=0,0055), y ahora está medido POR QUÉ.**
+
+Es lo primero del proyecto que se sostiene solo, sin depender de si la escena aporta.

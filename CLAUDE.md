@@ -55,6 +55,17 @@ columnas de ceros se reproduce la ventaja: **−0,260 en 5/5 folds, r=+0,991 fol
 fold**, residuo +0,042. **No hay ninguna configuración en el proyecto que le gane al
 baseline cinemático por una razón distinta de la escala de inicialización.**
 
+**Exp. 33 — el artefacto no aguanta ni cambiar k, y aparece lo unico solido.** A
+k=6 la ventaja de la inicializacion se evapora (−0,053, p=0,758, 3/5): el fold 4 la
+dio vuelta, el mismo que dio vuelta el exp. 31. Pero el brazo secundario dio el
+resultado mas firme de la semana: **k=6 empeora el ADE real en los 5 folds**
+(+0,510, p=0,0055, 0/5) mientras el minADE_6 del oraculo "mejora" 26 %. Y ahora
+esta medido POR QUE: sobre los 265 objetos de las 10 escenas, la dispersion entre
+los 6 modos a 3 s es de **16,7 m contra 5,97 m de recorrido real** (2,8x), con
+mediana de recorrido **0,00 m** porque la mitad de los objetos estan detenidos. Los
+seis modos no son seis futuros plausibles: son seis tiros. Ver
+`docs/figuras/k6_caja_y_modos.png`.
+
 **Los tres eslabones, cerrados dos:** el **encoder** funciona y no es el cuello
 (exps. 21, 27, 30: un encoder 2-5× mejor da la misma predicción); la
 **representación** está descartada por dos vías independientes (exp. 29 densidad,
@@ -84,5 +95,5 @@ y cuesta 39 h de GPU. Lo que da poder son **folds**, y harían falta 10.
 
 Ver [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) para la arquitectura, el flujo de
 datos, las 36 trampas, la guía de navegación y **la ruta**. Ver
-`docs/EXPERIMENTOS_DECODER.md` para los 32 experimentos con sus números y comandos
+`docs/EXPERIMENTOS_DECODER.md` para los 33 experimentos con sus números y comandos
 de reproducción.
