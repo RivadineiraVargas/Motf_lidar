@@ -48,6 +48,18 @@ static void load_predictions(const std::string& path) {
     printf("Predições carregadas: %.0f pontos.\n", count);
 }
 
+// Qual objeto esta em foco nesta cena, pelo id. Calculado aqui e nao guardado
+// pelo draw porque read_bbox_file corre ANTES e precisa do mesmo valor: se
+// dependesse do frame anterior a caixa ficaria um frame atrasada.
+static std::string foco_obj_id(const std::string& scene) {
+    auto it = g_predictions.find(scene);
+    if (g_focus_obj < 0 || it == g_predictions.end() || it->second.empty()) return "";
+    const int idx = g_focus_obj % (int) it->second.size();
+    int i = 0;
+    for (auto& kv : it->second) if (i++ == idx) return kv.first;
+    return "";
+}
+
 // Desenha as trajetórias no BEV: transforma global->sensor com inv(pose) e projeta.
 static void draw_predictions_birdview(cv::Mat& birdview, const std::string& scene,
                                       float pose[4][4], float meters, int size_in_pixels) {
@@ -316,7 +328,8 @@ int main(int argc, char** argv) {
 
             vector<vector<array<float, 3>>> all_bbox;
             vector<vector<float>> all_transformed_bbox_for_rangeview;
-            read_bbox_file(bbox_root_dir, scenes[s], pose_file_name, all_bbox, pose, birdview_image, all_transformed_bbox_for_rangeview, meters, size_in_pixels, show_bboxes);
+            read_bbox_file(bbox_root_dir, scenes[s], pose_file_name, all_bbox, pose, birdview_image, all_transformed_bbox_for_rangeview, meters, size_in_pixels, show_bboxes,
+                           foco_obj_id(scenes[s]));
 
             // Desenhar trajetórias preditas/reais sobre o BEV (tecla 't' alterna)
             if (show_predictions)

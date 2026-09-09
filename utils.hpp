@@ -68,10 +68,10 @@ void multiply_matrix_vector(const float mat[4][4], const float vec[4], float res
 int invert_matrix(const float mat[4][4], float inv[4][4]);
 void transform_vertices(const std::vector<std::array<float, 3>>& vertices, float lidar_pose[4][4], std::vector<float>& result);
 void transformar_para_sistema_lidar_topo(const std::vector<std::array<float, 3>>& bbox, float lidar_pose[4][4], std::vector<float>& result);
-void draw_bounding_box_birdview(const std::vector<float>& result, cv::Mat& birdview_image, float meters, int scale);
+void draw_bounding_box_birdview(const std::vector<float>& result, cv::Mat& birdview_image, float meters, int scale, cv::Scalar color = cv::Scalar(0, 255, 0), int thick = 2);
 void calculate_birdview_image(cv::Mat &birdview_image_color, size_t num_points, float meters, int size_in_pixels);
 bool read_pose_file(const char *filename, float pose[4][4]);
-void read_bbox_file(const char *objs_bbox_dir, const std::string& scene_name, const std::string& pose_name, std::vector<std::vector<std::array<float, 3>>> &all_bbox, float lidar_pose[4][4], cv::Mat& birdview_image, std::vector<std::vector<float>> &all_transformed_bbox_for_rangeview, float meters, int size_in_pixels, bool show_bboxes);
+void read_bbox_file(const char *objs_bbox_dir, const std::string& scene_name, const std::string& pose_name, std::vector<std::vector<std::array<float, 3>>> &all_bbox, float lidar_pose[4][4], cv::Mat& birdview_image, std::vector<std::vector<float>> &all_transformed_bbox_for_rangeview, float meters, int size_in_pixels, bool show_bboxes, const std::string& id_destacado = "");
 
 
 #endif // UTILS_HPP

@@ -311,7 +311,7 @@ void transformar_para_sistema_lidar_topo(const vector<array<float, 3>>& bbox, fl
 }
 
 // Funções de visualização
-void draw_bounding_box_birdview(const vector<float>& result, cv::Mat& birdview_image, float meters, int scale) {
+void draw_bounding_box_birdview(const vector<float>& result, cv::Mat& birdview_image, float meters, int scale, cv::Scalar color, int thick) {
     if (result.size() < 24) {
         printf("Bounding box incompleto para desenho.\n");
         return;
@@ -342,7 +342,7 @@ void draw_bounding_box_birdview(const vector<float>& result, cv::Mat& birdview_i
             cv::line(birdview_image, 
                         cv::Point(x_pixel1, y_pixel1), 
                         cv::Point(x_pixel2, y_pixel2), 
-                        cv::Scalar(0, 255, 0), 2);
+                        color, thick);
         }
     }
 }
@@ -497,7 +497,7 @@ bool read_pose_file(const char *filename, float pose[4][4]) {
     return true;
 }
 
-void read_bbox_file(const char *objs_bbox_dir, const string& scene_name, const string& pose_name, vector<vector<array<float, 3>>> &all_bbox, float lidar_pose[4][4], cv::Mat& birdview_image, vector<vector<float>> &all_transformed_bbox_for_rangeview, float meters, int size_in_pixels, bool show_bboxes) {
+void read_bbox_file(const char *objs_bbox_dir, const string& scene_name, const string& pose_name, vector<vector<array<float, 3>>> &all_bbox, float lidar_pose[4][4], cv::Mat& birdview_image, vector<vector<float>> &all_transformed_bbox_for_rangeview, float meters, int size_in_pixels, bool show_bboxes, const string& id_destacado) {
     int scale = size_in_pixels / (2 * meters);
     string pose_number = take_substring(1, ".", pose_name);
     if (pose_number.empty()) {
@@ -551,7 +551,16 @@ void read_bbox_file(const char *objs_bbox_dir, const string& scene_name, const s
                 transformar_para_sistema_lidar_topo(bbox_aux, lidar_pose, transformed_bbox_for_birdeyeview);
                 transform_vertices(bbox_aux, lidar_pose, transformed_bbox_for_rangeview);
                 all_transformed_bbox_for_rangeview.push_back(transformed_bbox_for_rangeview);
-                if (show_bboxes) {
+                // La caja del objeto EN FOCO va en amarillo y mas gruesa, y se
+                // dibuja aunque las demas esten apagadas (tecla b): sirve para
+                // anclar la prediccion al auto fisico sin llenar el BEV.
+                // Los archivos se llaman <obj_id>.txt, de ahi sale el id.
+                const bool es_foco = !id_destacado.empty() &&
+                                     entry_name == id_destacado + ".txt";
+                if (es_foco)
+                    draw_bounding_box_birdview(transformed_bbox_for_birdeyeview, birdview_image,
+                                               meters, scale, cv::Scalar(0, 255, 255), 3);
+                if (show_bboxes && !es_foco) {
                     draw_bounding_box_birdview(transformed_bbox_for_birdeyeview, birdview_image, meters, scale);
                 }
             }
