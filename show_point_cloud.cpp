@@ -26,6 +26,9 @@ static std::map<std::string, std::map<std::string, std::vector<TrajPoint>>> g_pr
 // tem como saber quantos objetos a cena atual tem.
 static int g_focus_obj   = -1;
 static int g_n_obj_scene = 0;
+// Quantos kinds acima de 2 procurar. 6 modos -> kinds 3..7, entao 5 basta;
+// deixo 7 de folga para k=8 sem tocar aqui de novo.
+static const int MAX_MODOS_EXTRA = 7;
 
 static void load_predictions(const std::string& path) {
     std::ifstream ifs(path);
@@ -61,12 +64,17 @@ static void draw_predictions_birdview(cv::Mat& birdview, const std::string& scen
     const int foco = (g_focus_obj < 0 || n_obj == 0) ? -1 : (g_focus_obj % n_obj);
     std::string id_foco;
     int idx_obj = -1;
+    int n_modos_extra = 0;
 
     for (auto& kv : it->second) {
         ++idx_obj;
         if (foco >= 0 && idx_obj != foco) continue;
         if (foco >= 0) id_foco = kv.first;
-        for (int kind = 0; kind <= 2; ++kind) {
+        // kind 3+ = hipoteses alternativas do modelo multimodal (k>1). So se
+        // desenham com UM carro em foco: com todos, seriam 6 linhas por objeto
+        // e o BEV viraria exatamente o emaranhado que a tecla n/m evita.
+        const int kind_max = (foco >= 0) ? 2 + MAX_MODOS_EXTRA : 2;
+        for (int kind = 0; kind <= kind_max; ++kind) {
             std::vector<std::pair<int, cv::Point>> proj;
             for (auto& p : kv.second) {
                 if (p.kind != kind) continue;
@@ -81,12 +89,15 @@ static void draw_predictions_birdview(cv::Mat& birdview, const std::string& scen
                           return a.first < b.first; });
             cv::Scalar color = (kind == 0) ? cv::Scalar(160,160,160)   // histórico
                              : (kind == 1) ? cv::Scalar(0,255,0)       // real (verde)
-                                           : cv::Scalar(0,0,255);      // predito (vermelho)
-            int thick = (kind == 0) ? 1 : 2;
+                             : (kind == 2) ? cv::Scalar(0,0,255)       // predito (vermelho)
+                                           : cv::Scalar(60,60,180);    // modos alternativos
+            int thick = (kind == 0 || kind >= 3) ? 1 : 2;
             for (size_t i = 1; i < proj.size(); ++i)
                 cv::line(birdview, proj[i-1].second, proj[i].second, color, thick, cv::LINE_AA);
-            for (auto& pr : proj)
-                cv::circle(birdview, pr.second, 3, color, -1, cv::LINE_AA);
+            if (kind < 3)                    // sem bolinhas nos alternativos: polui
+                for (auto& pr : proj)
+                    cv::circle(birdview, pr.second, 3, color, -1, cv::LINE_AA);
+            if (kind >= 3 && !proj.empty()) ++n_modos_extra;
         }
     }
 
@@ -97,9 +108,14 @@ static void draw_predictions_birdview(cv::Mat& birdview, const std::string& scen
         snprintf(rotulo, sizeof(rotulo),
                  "predicoes: TODOS (%d objs)   n/m = um carro por vez", n_obj);
     else
-        snprintf(rotulo, sizeof(rotulo),
-                 "predicoes: obj %s   (%d/%d)   n/m = trocar de carro",
-                 id_foco.c_str(), foco + 1, n_obj);
+        if (n_modos_extra > 0)
+            snprintf(rotulo, sizeof(rotulo),
+                     "predicoes: obj %s   (%d/%d)   +%d modos alternativos   n/m = trocar",
+                     id_foco.c_str(), foco + 1, n_obj, n_modos_extra);
+        else
+            snprintf(rotulo, sizeof(rotulo),
+                     "predicoes: obj %s   (%d/%d)   n/m = trocar de carro",
+                     id_foco.c_str(), foco + 1, n_obj);
     cv::putText(birdview, rotulo, cv::Point(10, 24), cv::FONT_HERSHEY_SIMPLEX,
                 0.55, cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
     cv::putText(birdview, rotulo, cv::Point(10, 24), cv::FONT_HERSHEY_SIMPLEX,

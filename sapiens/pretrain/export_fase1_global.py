@@ -68,8 +68,10 @@ def main():
                     help='si se da, exporta solo las escenas de validacion del fold')
     ap.add_argument('--scenes', nargs='+', default=None,
                     help='escenas explicitas (tienen prioridad sobre --fold)')
-    ap.add_argument('--pad-dim', type=int, default=None)
-    ap.add_argument('--num-modes', type=int, default=None)
+    ap.add_argument('--pad-dim', type=int, default=None,
+                    help='default: se DEDUCE del checkpoint')
+    ap.add_argument('--num-modes', type=int, default=None,
+                    help='default: se DEDUCE del checkpoint')
     ap.add_argument('--ventana', type=int, default=0,
                     help='cual ventana de cada objeto exportar (default 0)')
     ap.add_argument('--modos', choices=['mas-probable', 'todos'], default='mas-probable')
@@ -86,17 +88,38 @@ def main():
     init_default_scope('mmpretrain')
 
     cfg = Config.fromfile(args.cfg)
-    override = {}
-    if args.pad_dim is not None:
-        override['model.pad_dim'] = args.pad_dim
-    if args.num_modes is not None:
-        override['model.num_modes'] = args.num_modes
-    if override:
-        cfg.merge_from_dict(override)
-
-    model = MODELS.build(cfg.model)
     sd = torch.load(args.ckpt, map_location='cpu')
     sd = sd.get('state_dict', sd)
+
+    # GEOMETRIA DEDUCIDA DEL CHECKPOINT. Pasar --pad-dim/--num-modes a mano es
+    # la forma mas facil de dibujar basura convincente, asi que por default se
+    # leen de los tensores mismos:
+    #   mode_head.weight  (K, hidden)      -> num_modes; si no esta, K=1
+    #   decoder.0.weight  (hidden, in)     -> pad_dim = in - history_len*3
+    hl = cfg.train_dataloader.dataset['history_len']
+    if args.num_modes is not None:
+        nm = args.num_modes
+    else:
+        nm = sd['mode_head.weight'].shape[0] if 'mode_head.weight' in sd else 1
+    if args.pad_dim is not None:
+        pd = args.pad_dim
+    else:
+        w0 = sd.get('decoder.0.weight')
+        pd = int(w0.shape[1]) - hl * 3 if w0 is not None else 0
+        if pd < 0:
+            raise SystemExit(f'decoder.0 espera {w0.shape[1]} entradas pero la '
+                             f'historia son {hl*3}: el config no corresponde al ckpt')
+    origen = 'deducido del ckpt' if (args.pad_dim is None and args.num_modes is None) else 'parcialmente manual'
+    print(f'[geometria] pad_dim={pd}  num_modes={nm}  ({origen})')
+
+    # Solo el baseline tiene pad_dim; en el modelo con escena el ancho extra es
+    # scene_dim, que ya viene del config.
+    override = {'model.num_modes': nm}
+    if cfg.model['type'] == 'BaselineTrajectoryModel':
+        override['model.pad_dim'] = pd
+    cfg.merge_from_dict(override)
+
+    model = MODELS.build(cfg.model)
     # ESTRICTO a proposito: ver el encabezado. Hay DOS formas de que el
     # checkpoint no corresponda y las dos tienen que fallar fuerte:
     #   (a) desajuste de FORMA -> PyTorch lanza RuntimeError incluso con
