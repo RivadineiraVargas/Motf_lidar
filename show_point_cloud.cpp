@@ -90,7 +90,10 @@ static void draw_predictions_birdview(cv::Mat& birdview, const std::string& scen
             cv::Scalar color = (kind == 0) ? cv::Scalar(160,160,160)   // histórico
                              : (kind == 1) ? cv::Scalar(0,255,0)       // real (verde)
                              : (kind == 2) ? cv::Scalar(0,0,255)       // predito (vermelho)
-                                           : cv::Scalar(60,60,180);    // modos alternativos
+                                           : cv::Scalar(255,170,80);   // modos alternativos (AZUL)
+            // OJO: OpenCV es BGR, no RGB. Scalar(60,60,180) parecia azul leido
+            // como RGB y salia rojo oscuro, indistinguible de la prediccion
+            // principal. Azul de verdad es B alto: (255,170,80).
             int thick = (kind == 0 || kind >= 3) ? 1 : 2;
             for (size_t i = 1; i < proj.size(); ++i)
                 cv::line(birdview, proj[i-1].second, proj[i].second, color, thick, cv::LINE_AA);
@@ -147,6 +150,11 @@ int main(int argc, char** argv) {
                 std::cerr << "Erro: O argumento --input requer um caminho." << std::endl;
                 return EXIT_FAILURE;
             }
+        } else if (arg == "--foco") {
+            // Arrancar con un auto ya enfocado. Sirve para capturas
+            // reproducibles y para ver los modos alternativos sin tener que
+            // apretar n (que necesita el teclado en la ventana).
+            if (i + 1 < argc) g_focus_obj = atoi(argv[++i]);
         } else if (arg == "-v") {
             if (i + 1 < argc) {
                 try {
