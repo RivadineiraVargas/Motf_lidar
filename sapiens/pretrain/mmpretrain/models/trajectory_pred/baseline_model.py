@@ -21,14 +21,33 @@ class BaselineTrajectoryModel(BaseModel):
     """
 
     def __init__(self, history_len=5, pred_len=5, hidden_dim=512,
-                 num_modes=1, cls_weight=1.0, **kwargs):
+                 num_modes=1, cls_weight=1.0, pad_dim=0, **kwargs):
         super().__init__(**kwargs)
         assert num_modes >= 1, 'num_modes debe ser >= 1'
+        assert pad_dim >= 0, 'pad_dim debe ser >= 0'
         self.history_len = history_len
         self.pred_len = pred_len
         self.num_modes = num_modes
         self.cls_weight = cls_weight
-        input_dim = history_len * 3
+        # pad_dim=N pega N columnas de CEROS a la entrada. No agrega ninguna
+        # informacion — el objetivo es EXACTAMENTE el contrario: reproducir la
+        # geometria de la primera capa de TrajectoryModelWithAttention, que
+        # recibe scene_dim + history_len*3 y cuyas scene_dim columnas valen cero
+        # cuando el gate esta congelado en 0 (`gate0`).
+        #
+        # POR QUE IMPORTA: nn.Linear inicializa con cota 1/sqrt(in_features). Con
+        # in=15 la desviacion de los pesos sobre la historia es 0,1485; con in=79
+        # es 0,0645 — 2,3x mas chica, sobre las MISMAS entradas. Es decir, `gate0`
+        # y este baseline no se diferencian en informacion ni en capacidad (el MLP
+        # es identico), sino en la ESCALA DE INICIALIZACION. Sin este control, el
+        # -0,217 que `gate0` le saca al baseline en 5/5 folds se lee como "la
+        # arquitectura aporta" cuando podria ser solo eso.
+        #
+        # pad_dim=0 (el default) deja input_dim, los nombres de los parametros y
+        # la salida EXACTAMENTE como estaban: los checkpoints de los exps. 15-30
+        # siguen cargando sin cambios.
+        self.pad_dim = pad_dim
+        input_dim = history_len * 3 + pad_dim
         # UN SOLO Sequential, con la capa de salida adentro. Partirlo en tronco +
         # cabeza renombraría los parámetros (`decoder.6.*` -> `reg_head.*`) y los
         # checkpoints viejos cargarían con la capa de salida ALEATORIA sin avisar:
@@ -46,6 +65,12 @@ class BaselineTrajectoryModel(BaseModel):
         self.mode_head = nn.Linear(hidden_dim, num_modes) if num_modes > 1 else None
 
     def forward(self, obj_history_flat, obj_future_flat=None, mode='loss', **kwargs):
+        if self.pad_dim:
+            ceros = obj_history_flat.new_zeros(obj_history_flat.size(0), self.pad_dim)
+            # El orden importa: en TrajectoryModelWithAttention la escena va
+            # PRIMERO (`cat([scene_feat, obj_history_flat])`). Se replica aca para
+            # que las columnas de historia caigan en las mismas posiciones.
+            obj_history_flat = torch.cat([ceros, obj_history_flat], dim=1)
         rasgo = self.decoder[:-1](obj_history_flat)
         out = self.decoder[-1](rasgo)
         logits = self.mode_head(rasgo) if self.mode_head is not None else None

@@ -607,6 +607,56 @@ posteriores.**
     contra 0,0030). Queda sin tocar el tercer eslabón: el consumo en el decoder,
     **una sola query** de cross-attention comprimida a 64 dims.
 
+    **Y confirmado por segunda vía en el exp. 31:** range-view a resolución nativa
+    —2.650 columnas azimutales, 660 tokens, la geometría del sensor sin
+    discretizar— dio **+0,351 (p=0,557, 3/5 folds)**. La representación queda
+    **descartada por dos caminos independientes**. El consumo sigue sin tocarse
+    después de 32 experimentos.
+
+33. **Dos modelos que difieren solo en el ancho de la entrada NO son comparables.**
+    `nn.Linear` inicializa con cota `1/sqrt(in_features)`, así que agregar columnas
+    —**aunque valgan exactamente cero**— achica los pesos iniciales de *todas* las
+    demás. `BaselineTrajectoryModel` recibe `Linear(15, 512)` y
+    `TrajectoryModelWithAttention` recibe `Linear(79, 512)` porque concatena
+    `scene_dim=64`; con el gate congelado en 0 esas 64 columnas son ceros, pero la
+    desviación inicial sobre las 15 columnas útiles pasa de **0,1485 a 0,0645**.
+
+    Esto produjo **el mejor resultado del proyecto durante semanas**: `gate0` le
+    ganaba al baseline cinemático por −0,217 en 5/5 folds y se leía como "la
+    arquitectura aporta capacidad". El exp. 32 lo midió pegándole al baseline 64
+    columnas de ceros (`pad_dim` en `baseline_model.py`): **−0,260 en 5/5 folds,
+    r=+0,991 fold por fold** con la ventaja de `gate0`, residuo +0,042.
+
+    **Cómo no repetirlo:** antes de llamar "resultado" a una diferencia entre dos
+    modelos, listar **todas** sus diferencias, incluidas las que nadie eligió a
+    propósito. La pregunta que lo destapó no fue "¿es significativo?" sino
+    **"¿por qué exactamente sería mejor?"**.
+
+    Los efectos de escena (`gated` vs `gate0`) **no** están afectados: los dos
+    brazos comparten `input_dim=79` y el artefacto se cancela en la resta.
+
+34. **`pkill -f` y `pgrep -f` matchean tu propio comando.** El patrón aparece en la
+    línea de comandos del shell que lo ejecuta, así que `pkill -f run_x.sh` se mata
+    a sí mismo y `pgrep -f run_x.sh` reporta "vivo" un experimento que terminó hace
+    diez horas. Pasó tres veces. **Usar el truco del corchete** (`[r]un_x.sh`) o
+    matar por PID exacto, y verificar con `ps -o pid,cmd -p <pid>` antes de creerle.
+
+35. **Editar un `.sh` mientras corre lo rompe.** Bash lee el script por offset de
+    bytes, así que una edición desplaza lo que falta leer y salta
+    `syntax error near unexpected token 'done'`. **Correr siempre desde una copia
+    congelada** (`cp run_x.sh $SCRATCH/ && bash $SCRATCH/x.sh`), que además
+    sobrevive a que se edite el original.
+
+36. **Agregar semillas no da poder estadístico; agregar folds sí.** Medido en el
+    exp. 31: DE entre semillas 0,450, DE fold-a-fold **real** 0,587 — el ruido de
+    semilla es el **8 %** de la varianza entre folds. De 8 a 16 semillas el error
+    estándar baja un **2 %** (t de 1,65 a 1,67) y cuesta 39 h de GPU. Con esta
+    varianza harían falta **10 folds** para p<0,05, y hay 5 porque hay 10 escenas.
+
+    En el exp. 28 era al revés (85 % ruido de semilla), así que **no es una
+    constante del proyecto: hay que descomponer la varianza cada vez**
+    (`s2_true = s2_entre_folds − s2_entre_semillas/n`).
+
 ---
 
 ## El hueco de reproducibilidad

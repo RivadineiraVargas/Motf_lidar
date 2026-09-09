@@ -2495,3 +2495,269 @@ es un parámetro del config, así que ampliarlo se prueba **sin tocar código**.
 modelo apaga la escena, ampliar el canal por el que no pasa nada probablemente no
 cambie que no pase nada. El argumento a favor —que cierra *porque* el canal es
 estrecho— es circular y no está medido.
+
+---
+
+## Experimento 31: range-view a resolución nativa — la escena tampoco aporta, y el fold 0 engañó tres días
+
+**Fecha:** 2026-09-07 al 09-09 · **Rama:** `decoder/multimodal-wta`
+**Script:** `run_rv_nativo.sh` · **CSV:** `work_dirs/rv_nativo/rv_nativo_results.csv`
+**n = 5 folds × 8 semillas × 2 escenas** (160 filas), pareado por (fold, semilla);
+test entre folds con **n = 5**.
+
+### Por qué
+
+El exp. 29 midió que enriquecer los vóxeles (binario → densidad) no cambia nada, y
+el 30 que un encoder 2-5× mejor tampoco. Quedaba una crítica de fondo a la
+*representación*: **vóxeles de 2 m donde un peatón ocupa 0,4 × 0,4**, 300 vóxeles
+por frame, ocupación binaria — 1.500 bits de escena.
+
+Range-view es la alternativa natural: es la geometría **nativa** del sensor, sin
+discretizar. A resolución completa son **2.650 columnas azimutales** contra las 512
+que usaba el exp. 15 (`AZ_STRIDE=5`), y contra 300 vóxeles. Si la representación era
+el cuello, acá tenía que verse.
+
+### El cambio
+
+`range_view.py` estaba cableado a `RANGE_W=512`. Se parametrizó con un helper
+`_geom(az_stride, range_w, patch)` que propaga a `load_range_stack`,
+`load_range_sweep`, `unpatchify`, `num_tokens`, `patch_dim` y las tres clases de
+dataset. Con `az_stride=1` el ViT recibe **660 tokens** en vez de 160.
+
+Cinco encoders MAE nuevos (`mae_rangeview_fold{0..4}.py`) y cinco configs de decoder
+(`rvcv_dec_fold{0..4}.py`).
+
+### Dos bugs que encontró el brazo de control, no el experimental
+
+**BUG A — la normalización faltaba.** Los `rvcv_dec_fold*.py` no declaraban
+`clip_norm=None` ni `norm_scale=10.0`, así que **el 29,5 % del objetivo se recortaba**.
+Lo delató `gate0_rv` con **ADE 11,277 contra 2,781** del control equivalente en
+vóxeles: un número imposible, no un número malo. Corregido en los 5 configs,
+verificado 0 % recortado.
+
+Es la lección del exp. 14 otra vez: **el brazo de control atrapa lo que el
+experimental esconde.** Un `gated_rv` de 11,3 se habría leído como "range-view no
+sirve" y el bug habría sobrevivido.
+
+**BUG B — `runtime_info=None`.** Los configs de range-view desactivaban el
+`RuntimeInfoHook`, así que **`loss` y `lr` nunca llegaban al logger**. Ningún
+experimento de range-view anterior podía verificar que su encoder hubiera aprendido
+algo. Corregido; verificado que `loss: 0.0507` aparece en el log.
+
+**Un tercer bug, en `mae_vit_4d.py`,** se arregló en el commit `ceab089` antes de
+lanzar: `_ensure_pos_embed` reemplazaba en silencio un `pos_embed` entrenado por
+pesos aleatorios **y además lo descongelaba**. Ahora levanta `ValueError` si el
+dataset entrega un número de tokens distinto del declarado.
+
+### Control previo: los encoders aprendieron
+
+Pérdida de reconstrucción del MAE por fold: **0,0073 / 0,0082 / 0,0075 / 0,0115 /
+0,0070**.
+
+**Estas pérdidas NO son comparables con las de vóxeles** (0,0175-0,1121): distinto
+objetivo, distinta normalización, distinto número de tokens. Sirven para verificar
+que los cinco entrenamientos convergieron, no para rankear representaciones.
+
+### Resultado
+
+| fold | `gate0_rv` | `gated_rv` | efecto | semillas a favor | gate final |
+|---|---|---|---|---|---|
+| 0 | 4,646 | 3,494 | **−1,152** | 8/8 | 0,0076 |
+| 1 | 3,200 | 3,069 | −0,131 | 5/8 | 0,0108 |
+| 2 | 4,183 | 4,067 | −0,115 | 5/8 | 0,0114 |
+| 3 | 2,186 | 3,407 | **+1,221** | 0/8 | 0,0100 |
+| 4 | 2,092 | 4,023 | **+1,931** | 0/8 | 0,0128 |
+
+**Efecto: +0,351 ± 0,546 · t=0,64 · p=0,557 · 3/5 folds.** Negativo.
+
+Contra el baseline cinemático puro, `gated_rv` es **peor en 4 de 5 folds**
+(+0,576 de media, 1/5).
+
+### El fold 0 engañó tres días
+
+Con el fold 0 solo, el efecto era **−1,152 con 8/8 semillas**: el resultado más
+convincente del proyecto. Con dos folds, −0,64. Con tres, −0,47. Con cuatro, −0,04.
+Con cinco, **+0,35**.
+
+Y no fue ruido de semilla: **dentro** de los folds 3 y 4 el resultado es unánime
+(0/8 semillas). Los folds son genuinamente distintos.
+
+La descomposición de varianza lo cuantifica: DE entre semillas 0,450, DE fold-a-fold
+**real** 0,587 — el ruido de semilla explica solo el **8 %** de la dispersión entre
+folds. Con esta varianza harían falta **10 folds** para que un efecto de este tamaño
+alcance p<0,05; hay 5, porque hay 10 escenas.
+
+**Corolario práctico: agregar semillas no compra poder acá.** De 8 a 16 el error
+estándar baja un 2 % (t de 1,65 a 1,67) y cuesta 39 h de GPU. Ver
+`feedback_semillas_vs_folds` en la memoria.
+
+### El patrón que sí queda: la firma del ruido
+
+Correlación entre la dificultad del fold (ADE del baseline) y el efecto de la
+escena: **r = −0,72 (n=5)**.
+
+La escena "ayuda" donde el modelo predice mal (fold 0: baseline 4,317) y
+**perjudica** donde predice bien (folds 3 y 4: 2,297 y 2,356). Eso no es lo que hace
+la información útil — es lo que hace el ruido: cuando la predicción ya es buena,
+agregarle una señal sin contenido solo la puede empeorar.
+
+### Lo único que sobrevive
+
+El gate se abre a **0,0076-0,0128 en los cinco folds**, contra ~0,003 en vóxeles. Es
+la primera representación en 31 experimentos que el modelo no apaga del todo. Pero
+abrirlo no le sirvió: **abrió el gate y predijo peor**.
+
+### Lo que cierra
+
+La **representación** queda descartada por dos vías independientes: densidad
+continua (exp. 29) y geometría nativa del sensor a 2.650 columnas (exp. 31). Con el
+encoder ya descartado (exps. 21, 27, 30), queda un solo eslabón sin medir: el
+**consumo**.
+
+### Costo
+
+~40 h de GPU en tres lanzamientos. Dos murieron al terminar la sesión de Claude Code
+pese a `setsid`/`nohup`; el segundo perdió 20,7 h. **Lección: correr desde una copia
+congelada del script** (editar un `.sh` en ejecución rompe bash, que lo lee por
+offset de bytes) **y no depender de la sesión**.
+
+---
+
+## Experimento 32: el mejor resultado del proyecto era la escala de inicialización
+
+**Fecha:** 2026-09-09 · **Rama:** `decoder/multimodal-wta`
+**Script:** `run_initscale.sh` · **CSV:** `work_dirs/initscale/initscale_results.csv`
+**n = 5 folds × 8 semillas × 2 escenas** (160 filas), pareado por (fold, semilla);
+test entre folds con **n = 5**.
+
+### El hallazgo que lo origina
+
+`gate0` —la arquitectura con la escena **apagada**— le ganaba al baseline cinemático
+puro por **−0,217 en 5/5 folds** (t=−2,24, p=0,089). Era el mejor resultado del
+proyecto y se leía como *"el decoder con cross-attention aporta capacidad sobre el
+MLP"*.
+
+Al ir a verificar **por qué**:
+
+- `baseline_model.py` y `trajectory_model_attn.py` tienen el **mismo** MLP
+  (512-512-512) y la misma `mode_head`.
+- `noclip_base_fold*.py` y `noclip_dec_fold*.py` son idénticos en `lr=1e-3`,
+  `weight_decay=1e-4`, `batch_size=16`, `max_epochs=100`, `history_len=5`,
+  `pred_len=30`, `voxel_res=2.0` y `spatial_range`. **Mismo dataset.**
+- En `gate0` el gate está congelado en 0: la columna `gate` vale `0.00000` en las
+  40 corridas, o sea `scene_feat` es el vector **exactamente cero**.
+
+Queda **una sola** diferencia: el ancho de la primera capa.
+
+```
+baseline:  Linear(15, 512)   cota 1/sqrt(15) = 0,2582   std(hist) = 0,14851
+gate0:     Linear(79, 512)   cota 1/sqrt(79) = 0,1125   std(hist) = 0,06454
+```
+
+Las **mismas** 15 entradas, con pesos iniciales **2,3× más chicos**, porque
+`nn.Linear` inicializa con cota `1/sqrt(in_features)` y 64 de esas 79 columnas son
+ceros.
+
+### El diseño
+
+Se agregó `pad_dim` a `BaselineTrajectoryModel`: pega N columnas de **ceros** a la
+entrada. Sin información — solo para reproducir la geometría de la primera capa de
+`gate0`. Verificado **antes** de correr:
+
+```
+pad_dim=0   -> input_dim=15  std(hist)=0,14851   (idéntico al original)
+pad_dim=64  -> input_dim=79  std(hist)=0,06497   (gate0 real: 0,06454)
+perturbar las 64 columnas de pad en +100 -> max|dif| en la salida = 0,00000000
+```
+
+`pad_dim=0` es el default: los exps. 15-31 y sus checkpoints quedan intactos.
+
+Se corre en el **baseline** y no en `gate0` porque una corrida de `gate0` tarda
+29 min (`_encode_scene` corre igual aunque su salida se multiplique por cero) contra
+1,4 min del baseline, y la primera capa —donde vive el efecto— es idéntica en los dos.
+
+### Pre-registro
+
+Escrito en el encabezado del script antes de ver ningún número:
+
+- **H1 (artefacto):** `base_pad64 − base_pad0 ≈ −0,217` → el −0,217 es escala de
+  inicialización y se retracta.
+- **H0 (real):** `≈ 0` → viene de otra cosa del modelo con atención.
+- Un resultado intermedio (~−0,10) se reporta como parcialmente explicado; **no se
+  elige post-hoc cuál de las dos historias contar.**
+
+### Control de sanidad
+
+`base_pad0` (reentrenado) contra `baseline_k1` (checkpoints de `noclipcv`):
+**`max|dif| = 0,0000` en las 40 semillas de los 5 folds.** El entrenamiento es
+determinista dada la semilla y `pad_dim=0` no alteró nada. La comparación queda
+perfectamente limpia.
+
+### Resultado
+
+| fold | `base_pad0` | `base_pad64` | pad64−pad0 | `gate0`−pad0 |
+|---|---|---|---|---|
+| 0 | 4,317 | 3,681 | **−0,636** | −0,553 |
+| 1 | 2,170 | 2,084 | −0,085 | −0,080 |
+| 2 | 4,038 | 3,884 | −0,154 | −0,073 |
+| 3 | 2,297 | 1,943 | −0,354 | −0,320 |
+| 4 | 2,356 | 2,287 | −0,069 | −0,060 |
+
+**pad64 − pad0 = −0,260 ± 0,107 · t=−2,43 · p=0,072 · 5/5 folds.**
+
+**Correlación entre las dos últimas columnas: r = +0,991 (n=5).** Sesenta y cuatro
+columnas de ceros reproducen la ventaja de `gate0` **fold por fold**.
+
+**Residuo** —lo que queda de `gate0` tras descontar la escala— **`+0,042 ± 0,017`,
+t=2,51, p=0,066**: la arquitectura con atención es, si acaso, levemente **peor**.
+
+### H1 confirmada. Lo que se retracta
+
+**El −0,217 no mide arquitectura.** No hay evidencia de que el decoder con
+cross-attention aporte capacidad sobre el MLP cinemático. Lo que aporta es una
+elección de `scene_dim=64` que nadie tomó con este fin.
+
+Y al ordenar todo contra el baseline aparece lo peor:
+
+| configuración | ADE | vs baseline | folds |
+|---|---|---|---|
+| **baseline + 64 ceros** | **2,776** | **−0,260** | 5/5 |
+| `gate0` (arquitectura, sin escena) | 2,818 | −0,217 | 5/5 |
+| `gated_dens` | 2,849 | −0,187 | 5/5 |
+| `gated_maedens` | 2,856 | −0,179 | 5/5 |
+| `gated_obj` | 2,865 | −0,171 | 5/5 |
+| baseline cinemático puro | 3,036 | — | — |
+| `gated005` (escena, caja EGO) | 3,103 | +0,067 | 2/5 |
+| `gate0_rv` | 3,261 | +0,226 | 2/5 |
+| `gated_rv` | 3,612 | +0,576 | 1/5 |
+
+**Las cinco configuraciones que le ganan al baseline comparten `input_dim = 79`.** Y
+el baseline con ese mismo ancho **le gana a las cuatro que llevan ViT**.
+
+**No hay ninguna configuración en el proyecto que le gane al baseline cinemático por
+una razón distinta de la escala de inicialización.** Los 302,6 M de parámetros, el
+MAE, el encoder y la cross-attention, descontado el artefacto, no aportan nada.
+
+### Lo que esto NO dice
+
+- **No dice que la inicialización sea el arreglo.** `base_pad64` gana por un
+  artefacto igual de accidental; lo correcto sería barrer la escala de
+  inicialización como hiperparámetro, con validación en folds retenidos.
+- **No invalida los efectos de escena** (`gated` vs `gate0`): esos son pareados
+  entre dos brazos que comparten `input_dim=79`, así que el artefacto se cancela en
+  la resta. Los exps. 28-31 siguen valiendo.
+- **No es significativo a p<0,05** (p=0,072), igual que el −0,217 original nunca lo
+  fue (p=0,089). Lo que lo hace convincente es el **r=+0,991 fold por fold** y que
+  el mecanismo se **predijo del código antes de correr**, no después de ver el
+  resultado.
+
+### La lección
+
+Es el quinto efecto de la semana que se cae, pero el único que se cayó por
+**entender el mecanismo** en vez de por agregar folds. La pregunta que lo destapó no
+fue "¿es significativo?" sino **"¿por qué exactamente sería mejor?"** — y la
+respuesta no aguantó leer las dos clases en paralelo.
+
+**Regla que queda:** antes de llamar "resultado" a una diferencia entre dos modelos,
+listar **todas** sus diferencias, incluidas las que nadie eligió a propósito. El
+ancho de una capa que recibe ceros es una de ellas.
