@@ -72,7 +72,15 @@ void color_points_within_bbox(vector<lidar_point> &lidar_points, vector<vector<f
             float py = lidar_points[k].cartesian_y;
             float pz = lidar_points[k].cartesian_z;
 
-            if (point_in_polygon(px, py, base_points) && pz <= bbox_max_height[i]) {
+            // BUG (reportado 27/08, diagnosticado 09/09): faltaba el piso de la
+            // caja. bbox_min_height se calculaba en la linea de arriba, se
+            // reservaba y se liberaba, pero NUNCA se leia — asi que se pintaba de
+            // rojo todo punto dentro de la huella 2D del vehiculo y por debajo de
+            // su techo, incluido el suelo y todo lo que hubiera mas abajo. En la
+            // range view eso son manchones rojos verticales colgando de cada auto:
+            // la "imagen superior danada" de la reunion.
+            if (point_in_polygon(px, py, base_points) &&
+                pz <= bbox_max_height[i] && pz >= bbox_min_height[i]) {
                 lidar_points[k].r = 1.0f;
                 lidar_points[k].g = 0.0f;
                 lidar_points[k].b = 0.0f;

@@ -17,6 +17,16 @@ struct TrajPoint { int kind; int t; float x, y, z; };
 // scene -> obj_id -> pontos (coords GLOBAIS)
 static std::map<std::string, std::map<std::string, std::vector<TrajPoint>>> g_predictions;
 
+// ── Foco em um objeto de cada vez (pedido da Claudine, 09/09) ─────────────────
+// Com muitos carros o BEV vira um emaranhado de linhas e nao da para julgar
+// nenhuma predicao. g_focus_obj = -1 mostra todos; >= 0 mostra so o objeto
+// nessa posicao. g_predictions[scene] e um std::map, entao a ordem dos ids e
+// estavel entre frames e o indice sempre aponta para o mesmo carro.
+// g_n_obj_scene e escrito pelo draw e lido pelo tratador de teclas, que nao
+// tem como saber quantos objetos a cena atual tem.
+static int g_focus_obj   = -1;
+static int g_n_obj_scene = 0;
+
 static void load_predictions(const std::string& path) {
     std::ifstream ifs(path);
     if (!ifs.is_open()) {
@@ -45,7 +55,17 @@ static void draw_predictions_birdview(cv::Mat& birdview, const std::string& scen
     float inv[4][4];
     if (!invert_matrix(pose, inv)) return;
 
+    const int n_obj = (int) it->second.size();
+    g_n_obj_scene = n_obj;
+    // Se a cena anterior tinha mais objetos, o indice pode estar fora daqui.
+    const int foco = (g_focus_obj < 0 || n_obj == 0) ? -1 : (g_focus_obj % n_obj);
+    std::string id_foco;
+    int idx_obj = -1;
+
     for (auto& kv : it->second) {
+        ++idx_obj;
+        if (foco >= 0 && idx_obj != foco) continue;
+        if (foco >= 0) id_foco = kv.first;
         for (int kind = 0; kind <= 2; ++kind) {
             std::vector<std::pair<int, cv::Point>> proj;
             for (auto& p : kv.second) {
@@ -69,6 +89,21 @@ static void draw_predictions_birdview(cv::Mat& birdview, const std::string& scen
                 cv::circle(birdview, pr.second, 3, color, -1, cv::LINE_AA);
         }
     }
+
+    // Rotulo: sem isto nao da para saber qual carro esta em foco nem que a
+    // tecla existe.
+    char rotulo[192];
+    if (foco < 0)
+        snprintf(rotulo, sizeof(rotulo),
+                 "predicoes: TODOS (%d objs)   n/m = um carro por vez", n_obj);
+    else
+        snprintf(rotulo, sizeof(rotulo),
+                 "predicoes: obj %s   (%d/%d)   n/m = trocar de carro",
+                 id_foco.c_str(), foco + 1, n_obj);
+    cv::putText(birdview, rotulo, cv::Point(10, 24), cv::FONT_HERSHEY_SIMPLEX,
+                0.55, cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
+    cv::putText(birdview, rotulo, cv::Point(10, 24), cv::FONT_HERSHEY_SIMPLEX,
+                0.55, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
 }
 
 int main(int argc, char** argv) {
@@ -357,6 +392,20 @@ int main(int argc, char** argv) {
                     else if ((key == 84) || (key == 116)) {
                         show_predictions = !show_predictions;
                         break; // t — alterna trajetórias preditas
+                    }
+                    else if ((key == 78) || (key == 110)) {
+                        // n — proximo carro. Cicla: todos -> 0 -> 1 -> ... -> todos
+                        if (g_n_obj_scene <= 0)                        g_focus_obj = -1;
+                        else if (g_focus_obj + 1 >= g_n_obj_scene)     g_focus_obj = -1;
+                        else                                           g_focus_obj += 1;
+                        break; // n
+                    }
+                    else if ((key == 77) || (key == 109)) {
+                        // m — carro anterior, mesmo ciclo ao contrario
+                        if (g_n_obj_scene <= 0)      g_focus_obj = -1;
+                        else if (g_focus_obj < 0)    g_focus_obj = g_n_obj_scene - 1;
+                        else                         g_focus_obj -= 1;
+                        break; // m
                     }
                     else if ((key == 82) || (key == 114)) {
                         draw_red_points = !draw_red_points;
