@@ -70,6 +70,17 @@
 # hoy escribe 20. Mezclarlos corromperia el CSV del exp. 18.
 #
 # 8 corridas de ~22,6 min + 1 de sanidad = ~3,4 h.
+# ACTUALIZACION 11/09 — TRES BRAZOS, NO UNO. El control de sanidad (ft0chk)
+# fallo el 10/09: re-correr ft0 semilla 0 dio ADE 3,744 contra 4,500 del CSV del
+# exp. 18, con 43 % menos objetos (filtro de huecos, 27871e0; corte 1ec3f89). Los
+# ft0/ft4 de jm_results.csv NO son comparables. Por eso se re-corren los tres
+# brazos bajo el pipeline actual, mismas semillas, mismo todo:
+#   ft0    congelado                              (control)
+#   ft4    ultimos 4 bloques, lr 1e-3 (como el 18) (reproduce el error del 18)
+#   ft4lr  ultimos 4 bloques, lr 1e-5 en encoder  (el experimento correcto)
+# Los contrastes pre-registrados no cambian: ft4lr-ft0 y ft4lr-ft4.
+# GPU verificada tras el reinicio: 2.340 MHz, P0, 8,96 TFLOP/s (antes 0,78).
+# 24 corridas x ~23 min = ~9 h.
 cd /home/lcad/lidar_sweep_viewer/sapiens/pretrain
 source /home/lcad/miniconda3/etc/profile.d/conda.sh
 conda activate sapiens_gpu
@@ -98,13 +109,11 @@ correr() {   # $1=variante  $2=semilla  $3..=opciones extra
     }
 }
 
-echo "######## SANIDAD: ft0 reejecutado (1 semilla) debe reproducir el CSV del exp. 18 ########"
-correr ft0chk 0 model.finetune_blocks=0
-
-echo "######## ft4lr — 8 semillas ($(date '+%d/%m %H:%M')) ########"
 for S in 0 1 2 3 4 5 6 7; do
+    echo "######## semilla $S ($(date '+%d/%m %H:%M')) ########"
+    correr ft0   $S model.finetune_blocks=0
+    correr ft4   $S model.finetune_blocks=4
     correr ft4lr $S model.finetune_blocks=4 $PW
-    echo "----- semilla $S lista ($(date '+%d/%m %H:%M')) -----"
 done
 
 echo "=== CONTROLES OBLIGATORIOS ==="
@@ -113,6 +122,3 @@ grep -l "Load checkpoint from" work_dirs/ft4lr/*.log | wc -l | xargs echo "   lo
 grep -h "Load checkpoint from" work_dirs/ft4lr/ft4lr_f0s0.log | head -1
 echo "2) grupos de LR reales en el log de entrenamiento:"
 grep -c "lr=1e-05" work_dirs/ft4lr/ft4lr_f0s0.log | xargs echo "   parametros con lr=1e-05:"
-echo "3) sanidad ft0chk vs jm_results.csv:"
-echo "   python3 -c \"import csv;[print(r) for r in csv.reader(open('$CSV')) if r[1]=='ft0chk']\""
-echo "   comparar contra: grep '^0,ft0,0,' work_dirs/jm/jm_results.csv"
