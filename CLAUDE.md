@@ -73,6 +73,20 @@ exp. 31 range-view nativo); el **consumo** —una sola query de cross-attention
 comprimida a 64 dims— **no se tocó en 32 experimentos**. Es el único sospechoso que
 queda.
 
+**Exp. 34 — el exp. 18 queda retractado, y el hueco del encoder vuelve a abrirse.**
+Al ir a cerrar el hueco que dejo el exp. 18 (descongelo 50,4 M de 302,6 M, por
+memoria) aparecieron dos problemas del propio exp. 18: (a) esos bloques corrieron a
+**lr=1e-3**, cien veces el `--enc-lr` apropiado, porque el config no declara
+`paramwise_cfg` y `finetune_blocks` solo cambia `requires_grad` —verificado
+construyendo el optimizador: 1 solo grupo—; y (b) sus numeros son del 28/08, del
+lado invalido del corte del 30/08, y **no se reproducen**: re-correr `ft0` hoy da
+ADE 3,744 contra 4,500 con **43 % menos objetos** de validacion. Su conclusion
+("queda descartada la hipotesis del congelamiento") **no se sostiene**. La medicion
+correcta esta pre-registrada en `run_ft4lr.sh` pero **bloqueada**: la GPU entrega el
+5 % (210 MHz de 3.105, 0,78 TFLOP/s de ~15) desde el 06/09 y las 24 corridas pasan
+de ~9 h a ~72 h. `nvidia-smi -pl` no esta soportado en esta laptop; el arreglo
+esperable es reiniciar.
+
 **Lo defendible hoy no es un número de predicción sino lo metodológico:** minADE_6
 mejora 29 % (p=0,003, 5/5) mientras el ADE real empeora en 0/5 folds —la métrica de
 la literatura premia lo que empeora la predicción, y un survey de ~350 métodos no lo
@@ -94,6 +108,6 @@ bueno**: a 100 sweeps el encoder pica cerca de la época 1000 y después memoriz
 y cuesta 39 h de GPU. Lo que da poder son **folds**, y harían falta 10.
 
 Ver [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) para la arquitectura, el flujo de
-datos, las 36 trampas, la guía de navegación y **la ruta**. Ver
-`docs/EXPERIMENTOS_DECODER.md` para los 33 experimentos con sus números y comandos
+datos, las 39 trampas, la guía de navegación y **la ruta**. Ver
+`docs/EXPERIMENTOS_DECODER.md` para los 34 experimentos con sus números y comandos
 de reproducción.

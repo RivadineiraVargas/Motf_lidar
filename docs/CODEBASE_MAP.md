@@ -657,6 +657,48 @@ posteriores.**
     constante del proyecto: hay que descomponer la varianza cada vez**
     (`s2_true = s2_entre_folds − s2_entre_semillas/n`).
 
+37. **Descongelar pesos pre-entrenados NO es fine-tuning si no les bajás la tasa.**
+    `finetune_blocks` en `trajectory_model_attn.py` solo cambia `requires_grad`; no
+    crea grupos de parámetros. Y los configs de Fase 1 declaran un solo
+    `optim_wrapper` sin `paramwise_cfg`, así que **todo lo entrenable comparte el LR
+    del decoder**. Verificado construyendo el optimizador: con `finetune_blocks=4`
+    quedan 55,3 M entrenables en **1 grupo a `lr=1e-3`** — los 50,4 M pre-entrenados
+    a cien veces el `--enc-lr` apropiado (1e-5). Eso no ajusta el pre-entrenamiento:
+    lo destruye.
+
+    Costó la conclusión del **exp. 18** ("queda descartada la hipótesis del
+    congelamiento"), retractada en el exp. 34 doce días después.
+
+    **El arreglo no necesita código:**
+    `--cfg-options optim_wrapper.paramwise_cfg.custom_keys.encoder.lr_mult=0.01`
+    da 302,6 M a `1e-5` y 4,9 M a `1e-3`. El `--enc-lr` con grupos existe en
+    `train_decoder_mini.py:510`, pero ese track está congelado.
+
+    **Regla:** un experimento que descongela, ajusta o transfiere pesos
+    pre-entrenados declara **la tasa de esos pesos** en su tabla, igual que declara
+    el n. Si no aparece, no se sabe qué se midió.
+
+38. **Antes de comparar contra un CSV viejo, re-ejecutá una celda de ese CSV.**
+    En el exp. 34, re-correr `ft0` semilla 0 con el pipeline actual dio ADE 3,744
+    contra 4,500, con **43 % menos objetos** de validación y el gate en 0,109 contra
+    0,071 — porque `27871e0` añadió el filtro de huecos de etiquetado y `1ec3f89`
+    es el corte del 30/08. Costó 23 minutos y evitó 72 horas de cómputo contra una
+    base inválida.
+
+    Corolario operativo: `eval_fase1_seeds.py` hoy escribe **20 columnas** y los CSV
+    anteriores a septiembre tienen **11**. Escribir en uno viejo lo corrompe — usar
+    CSV aparte y unir en el análisis.
+
+39. **La GPU puede estar entregando el 5 % sin que nada falle.** El 10/09 se midió
+    210 MHz de 3.105, 8,5 W de 140, P8 bajo carga al 100 % y **0,78 TFLOP/s de ~15**
+    — con 43 °C y sin errores NVRM/Xid. Las corridas pasaron de 0,23 a 2,53 s/iter
+    (11×) sin que ningún log lo dijera. En esta laptop `nvidia-smi -pl` **no está
+    soportado** y `-rgc`/`-rac` no hacen nada; el arreglo esperable es reiniciar.
+
+    **Antes de estimar cuánto tarda algo, mirar `nvidia-smi --query-gpu=clocks.sm`
+    bajo carga.** Varias estimaciones de tiempo de esa semana midieron una GPU
+    frenada.
+
 ---
 
 ## El hueco de reproducibilidad

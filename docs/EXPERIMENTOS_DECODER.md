@@ -1103,6 +1103,15 @@ condición refutada.
 
 ## Experimento 18: descongelar el encoder (réplica de JointMotion) — sin efecto
 
+> **RETRACTADO el 11/09/2026 — ver el experimento 34.** Este experimento no midió
+> fine-tuning: los 50,4 M de pesos pre-entrenados se optimizaron a `lr=1e-3`, cien
+> veces el `--enc-lr` apropiado, porque el config no declara `paramwise_cfg` y
+> `finetune_blocks` solo cambia `requires_grad`. Además sus números son del 28/08,
+> del lado inválido del corte del 30/08, y no se reproducen con el pipeline actual
+> (el 43 % de los objetos de validación desapareció al añadirse el filtro de huecos
+> de etiquetado). **Su conclusión —"queda descartada la hipótesis del
+> congelamiento"— no se sostiene.** Lo que sigue se conserva como registro.
+
 **Fecha:** 2026-08-28/29. **Rama:** `encoder/jointmotion-finetune`.
 **Script:** `run_jointmotion.sh`. **Datos:** `work_dirs/jm/jm_results.csv`.
 
@@ -2878,3 +2887,158 @@ semana: **pasar a la métrica multimodal de la literatura empeora la predicción
 de forma unánime (0/5 folds, p=0,0055), y ahora está medido POR QUÉ.**
 
 Es lo primero del proyecto que se sostiene solo, sin depender de si la escena aporta.
+
+---
+
+## Experimento 34: el exp. 18 no midió lo que dice medir — retractación
+
+**Fecha:** 2026-09-10/11 · **Rama:** `decoder/multimodal-wta`
+**Script:** `run_ft4lr.sh` (escrito y pre-registrado; **la medición quedó bloqueada**)
+**Estado:** retractación documentada. **No hay resultado nuevo de predicción.**
+
+### Por qué se volvió a mirar el exp. 18
+
+El exp. 18 concluyó que descongelar el encoder no tiene efecto (ft0 5,22 / ft2 5,22 /
+ft4 5,17, con las semillas repartidas 4/8) y dio por **descartada la hipótesis del
+congelamiento**. Pero dejó un hueco explícito en su propio script: descongeló como
+máximo **50,4 M de 302,6 M**, y no por diseño sino por memoria —"descongelar los 302M
+da OOM en 8 GB con lote 16, y bajar el lote a 4 degrada el modelo POR SÍ SOLO
+(ADE 4,84 → 8,29)".
+
+BEV-MAE (arXiv 2212.05758) y los demás precedentes positivos de pre-entrenamiento
+auto-supervisado sobre LiDAR hacen fine-tuning del encoder **completo**, nunca
+parcial. Era la única variante de esa receta que nunca se pudo correr.
+
+Al ir a cerrar ese hueco aparecieron **dos problemas** en el exp. 18, y ninguno es
+el que se iba a investigar.
+
+### Problema 1 — los bloques descongelados corrieron a la tasa del decoder
+
+`configs/sapiens_mae/lidar/geo_dec_fold0.py:80-82`:
+
+```python
+optim_wrapper = dict(type='OptimWrapper',
+    optimizer=dict(type='AdamW', lr=1e-3, weight_decay=1e-4))
+```
+
+**`lr=1e-3`, sin `paramwise_cfg`.** Y `finetune_blocks` solo cambia `requires_grad`
+(`trajectory_model_attn.py:35-46`); no crea grupos de parámetros.
+
+Verificado construyendo el optimizador real, que es la prueba y no la lectura:
+
+| `finetune_blocks` | entrenables | entrenables en el encoder | grupos | LR |
+|---|---|---|---|---|
+| 0 | 4,9 M | 0 | 1 | `1e-3` |
+| 4 | 55,3 M | **50,4 M** | **1** | **`1e-3`** |
+
+Los 50,4 M de pesos **pre-entrenados** se optimizaron a `1e-3` — **cien veces** el
+`--enc-lr` por defecto (`1e-5`) del propio proyecto. Eso no es fine-tuning: es
+destruir el pre-entrenamiento a la tasa de un decoder que arranca aleatorio. Que ft2
+y ft4 dieran idéntico a ft0 es **consistente** con eso: a `1e-3` durante 100 épocas,
+un encoder pre-entrenado y uno aleatorio convergen al mismo sitio.
+
+El mecanismo de LR separado **existe** —`--enc-lr`, `train_decoder_mini.py:510`—
+pero solo en el track `decoder_mini`, que está congelado. La ruta de Fase 1
+(`tools/train.py` + configs) nunca lo tuvo.
+
+### Problema 2 — los números del exp. 18 no se reproducen
+
+Control de sanidad: se re-ejecutó `ft0` (semilla 0) con el pipeline actual, idéntico
+en todo lo demás.
+
+| | escena `7e2f…` | escena `82f9…` | **ADE móviles ponderado** | gate |
+|---|---|---|---|---|
+| `ft0` (28/08) | n=200, 5,028 | n=119, 3,609 | **4,500** (n=317) | 0,0709 |
+| `ft0chk` (10/09) | n=84, 4,716 | n=99, 2,921 | **3,744** (n=181) | 0,1094 |
+
+No reproduce en **ninguna** dimensión: **el 43 % de los objetos desapareció**, el ADE
+cambia −0,755 m y el gate pasa de 0,071 a 0,109.
+
+**La causa está identificada.** El dataset y el evaluador cambiaron después del
+28/08: `27871e0` añadió el filtro de ventanas con hueco de etiquetado —lo que explica
+los 200 → 84 objetos y que las épocas pasaran de 20 a 15 iteraciones— y `1ec3f89` es
+el commit que este documento ya declara como corte:
+*"ningún número anterior al 30/08 es comparable con los posteriores"*.
+
+**El exp. 18 es del 28/08, del lado inválido de ese corte.** Su conclusión se citó
+durante doce días sin notar que la regla del propio proyecto la excluía.
+
+### Lo que se retracta
+
+> *"Queda descartada la hipótesis del congelamiento como explicación del resultado
+> negativo del proyecto."*
+
+**No se sostiene.** No porque se sepa falsa, sino porque el experimento que la
+sostiene (a) optimizó los pesos pre-entrenados a cien veces la tasa apropiada, y
+(b) produjo números que no son comparables con nada medido después del 30/08.
+
+**El hueco vuelve a estar abierto**, y ahora tiene dos ejes en vez de uno:
+*cuánto* se descongela × *a qué tasa*. El exp. 18 exploró una sola esquina, con la
+tasa equivocada.
+
+### Lo que sí quedó verificado, y habilita el experimento correcto
+
+1. **`paramwise_cfg` da el LR separado sin tocar código.** Pasado por
+   `--cfg-options optim_wrapper.paramwise_cfg.custom_keys.encoder.lr_mult=0.01`,
+   mmengine construye **313 grupos: 302,6 M a `1e-5` y 4,9 M a `1e-3`**. Verificado.
+2. **El descongelamiento parcial con LR correcto entra holgado:** `finetune_blocks=4`
+   da **pico 3,10 GB de 7,62**.
+3. **El descongelamiento TOTAL sigue sin entrar.** Medido hoy, no heredado de la nota
+   del 28/08: `freeze_encoder=False`, lote 16, entrada real `(16, 300, 5)`, tres pasos
+   completos → **OOM con pico 6,89 GB de 7,62 GB** en la RTX 4060 Laptop (8.188 MiB,
+   la única disponible). `MAEViT4D` hereda de `VisionTransformer` de mmpretrain, que
+   **no acepta `with_cp`**, así que tampoco hay gradient checkpointing sin escribirlo.
+   Bajar el lote está prohibido: confunde el resultado con el efecto ya medido
+   (4,84 → 8,29).
+
+### Por qué no hay resultado nuevo: la GPU está a 210 MHz
+
+El experimento pre-registrado (`ft0`, `ft4`, `ft4lr` × 8 semillas bajo el pipeline
+actual, 24 corridas) se detuvo al descubrirse que la GPU entrega el **5 %** de su
+capacidad:
+
+| | actual | máximo |
+|---|---|---|
+| clock SM | **210 MHz** | 3.105 MHz |
+| clock memoria | 405 MHz | 8.001 MHz |
+| potencia | 8,5 W | 140 W |
+| temperatura | 43 °C | — |
+| matmul sostenido | **0,78 TFLOP/s** | ~15 TFLOP/s |
+
+Medido **bajo carga al 100 %**, no en reposo. `SW Power Cap: Active` y
+`SW Thermal Slowdown: Active` con `HW Thermal Slowdown: Not Active` a 43 °C: es un
+tope por software, no un problema térmico.
+
+Ritmo por iteración de entrenamiento, misma máquina y misma arquitectura:
+
+| fecha | corrida | s/iter |
+|---|---|---|
+| 28/08 | `ft0` | 0,2222 |
+| 30/08 | `gated` | 0,2324 |
+| 04/09 | `gated_obj` | 0,2308 |
+| 05/09 | `gated_maedens` | 0,2318 |
+| **10/09** | **`ft0chk`** | **2,5262** |
+
+**11× más lento.** `nvidia-smi -pl` **no está soportado** en esta GPU de portátil
+("Changing power management limit is not supported"); `-rgc`/`-rac` no tienen efecto;
+`nvidia-powerd` figura `disabled` desde siempre, así que no es la regresión. Sin
+errores NVRM/Xid en `dmesg`, cargador enchufado, sin `platform_profile`. Lo más
+probable es que el controlador embebido metiera el dGPU en un estado de protección
+tras ~40 h seguidas de entrenamiento y no lo soltara; el arreglo esperable es un
+reinicio.
+
+A 210 MHz las 24 corridas son **~72 h**; a velocidad normal, **~9 h**.
+
+### La lección
+
+Es el mismo patrón que el exp. 32, por un camino distinto. Allá la pregunta que
+destapó el artefacto fue *"¿por qué exactamente esto sería mejor?"*; acá fue
+**"¿con qué tasa se entrenaron esos pesos?"**. Las dos veces, un resultado del ledger
+no sobrevivió a que alguien preguntara por el mecanismo en vez de por el p-valor.
+
+**Regla que queda:** un experimento que descongela, ajusta o transfiere pesos
+pre-entrenados debe **declarar la tasa de aprendizaje de esos pesos** en su tabla de
+resultados, igual que declara el n. Si no aparece, no se sabe qué se midió.
+
+Y una segunda: **antes de comparar contra un CSV viejo, re-ejecutar una celda de
+ese CSV.** Acá costó 23 minutos y evitó 72 horas de cómputo contra una base inválida.
