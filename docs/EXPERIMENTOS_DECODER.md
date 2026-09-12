@@ -2893,8 +2893,9 @@ Es lo primero del proyecto que se sostiene solo, sin depender de si la escena ap
 ## Experimento 34: el exp. 18 no midió lo que dice medir — retractación
 
 **Fecha:** 2026-09-10/11 · **Rama:** `decoder/multimodal-wta`
-**Script:** `run_ft4lr.sh` (escrito y pre-registrado; **la medición quedó bloqueada**)
-**Estado:** retractación documentada. **No hay resultado nuevo de predicción.**
+**Script:** `run_ft4lr.sh` · **CSV:** `work_dirs/ft4lr/ft4lr_results.csv`
+**n = 1 fold × 8 semillas × 2 escenas**, pareado por semilla, promediado **ponderado
+por objetos**. Medido el 12/09 tras destrabar la GPU.
 
 ### Por qué se volvió a mirar el exp. 18
 
@@ -2991,7 +2992,7 @@ tasa equivocada.
    Bajar el lote está prohibido: confunde el resultado con el efecto ya medido
    (4,84 → 8,29).
 
-### Por qué no hay resultado nuevo: la GPU está a 210 MHz
+### El desvío de cinco días: la GPU entregando el 5 %
 
 El experimento pre-registrado (`ft0`, `ft4`, `ft4lr` × 8 semillas bajo el pipeline
 actual, 24 corridas) se detuvo al descubrirse que la GPU entrega el **5 %** de su
@@ -3028,6 +3029,84 @@ tras ~40 h seguidas de entrenamiento y no lo soltara; el arreglo esperable es un
 reinicio.
 
 A 210 MHz las 24 corridas son **~72 h**; a velocidad normal, **~9 h**.
+
+**Resuelto el 11/09 con un reinicio:** la GPU volvió a 2.340 MHz, 80 W, P0 y
+**8,96 TFLOP/s** (contra 0,78). El límite de potencia volvió solo a los 80 W de
+fábrica. La causa no fue `nvidia-smi -pl` —no está soportado acá— sino el
+controlador embebido: en el arranque siguiente se lo vio también **dejar de cargar
+la batería** (`status: Unknown`, `current_now: 0` con el cargador enchufado) y
+provocar un **corte de energía en seco** a los 10 min de arrancar `ft4`, el brazo
+que más consume. La batería está sana (89,7 % de la capacidad de fábrica, 89
+ciclos): es el EC, no la batería. El experimento se relanzó y completó.
+
+### El experimento, ahora sí: tres brazos
+
+El control de sanidad obligó a cambiar el diseño. En vez de un brazo nuevo contra
+el `ft0` del CSV viejo —que resultó incomparable— se corrieron **tres brazos
+frescos**, todos bajo el pipeline actual y con las mismas semillas:
+
+| brazo | descongela | LR del encoder | qué mide |
+|---|---|---|---|
+| `ft0` | nada | — | control |
+| `ft4` | últimos 4 bloques | `1e-3` | **reproduce el error del exp. 18** |
+| `ft4lr` | últimos 4 bloques | `1e-5` (`lr_mult=0.01`) | el experimento correcto |
+
+**Controles de sanidad, los tres pasan:**
+
+- **24/24** logs con `Load checkpoint from ./work_dirs/geo/mae_encoder_fold0.pth`.
+- `lr=1e-05` aparece en **48 parámetros solo en `ft4lr`** (4 bloques × 12) y en
+  **cero** en `ft0` y `ft4`. Es la prueba de que el `paramwise_cfg` llegó al
+  entrenamiento real y de que `ft4` corrió el LR equivocado a propósito.
+
+### Resultado
+
+| brazo | ADE móviles | gate final |
+|---|---|---|
+| `ft0` | 5,155 | 0,1259 |
+| `ft4` | 4,980 | 0,0957 |
+| `ft4lr` | 5,000 | 0,1072 |
+
+| contraste | efecto | semillas | t | p |
+|---|---|---|---|---|
+| **PRINCIPAL** `ft4lr − ft0` | **−0,155** | 5/8 | −0,78 | **0,461** |
+| **SECUNDARIA** `ft4lr − ft4` | **+0,020** | 4/8 | +0,12 | **0,908** |
+| *(control)* `ft4 − ft0` | −0,174 | 5/8 | −2,08 | 0,076 |
+
+Por semilla, el principal: +0,016 · −0,635 · +0,169 · −0,346 · −1,082 · +0,806 ·
+−0,115 · −0,051. La dispersión (±1 m) se come la media: es la firma de un efecto
+nulo, no de uno pequeño.
+
+**H_b en los dos contrastes pre-registrados**, que era la expectativa declarada
+por escrito antes de correr.
+
+### Lo que esto responde
+
+**¿Descongelar bien ayuda?** No. **¿La tasa era el problema?** Tampoco: entrenar el
+encoder a `1e-5` en vez de `1e-3` da **+0,020**, indistinguible de cero.
+
+Eso deja al exp. 18 en una posición que conviene decir con precisión:
+
+> **El experimento estaba mal hecho, pero su conclusión era correcta.** La
+> retractación se sostiene —midió con el LR equivocado y contra una base
+> incomparable— y aun así descongelar no ayuda, ni siquiera haciéndolo bien.
+
+### Lo que NO se puede concluir
+
+- **El descongelamiento total sigue sin medirse.** Era la pregunta original y sigue
+  bloqueada por VRAM. Lo que se cerró es el eje del LR, que apareció en el camino.
+- **Esto es 1 fold.** Por la regla 2, vale para el fold 0. El ruido entre folds es
+  ~3× el de semillas, así que −0,155 no sobreviviría a la validación cruzada.
+- **El control `ft4 − ft0` (−0,174, p=0,076) no es pre-registrado** y no cruza el
+  umbral. Si algo sugiere, es que descongelar con el LR *equivocado* ayuda algo más
+  que con el correcto — lo contrario de lo que predice la teoría. Con 8 semillas en
+  un fold, no concluye nada.
+- **El criterio terciario del gate queda ANULADO.** Se pre-registró que abrir por
+  encima de ~0,1 sería señal, contra el ~0,07 de `ft0/ft2/ft4`. Los tres brazos dan
+  0,096–0,126, pero el 0,07 de referencia venía del exp. 18 — justamente lo que se
+  demostró incomparable. **El criterio se escribió contra una base inválida y no
+  mide nada.**
+- **La precisión de validez no se pudo reportar:** esa columna no existe en los CSV
+  de Fase 1 (ni de 11 ni de 20 columnas). Es de Fase 2 / decoder_mini.
 
 ### La lección
 

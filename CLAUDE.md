@@ -73,19 +73,26 @@ exp. 31 range-view nativo); el **consumo** —una sola query de cross-attention
 comprimida a 64 dims— **no se tocó en 32 experimentos**. Es el único sospechoso que
 queda.
 
-**Exp. 34 — el exp. 18 queda retractado, y el hueco del encoder vuelve a abrirse.**
-Al ir a cerrar el hueco que dejo el exp. 18 (descongelo 50,4 M de 302,6 M, por
-memoria) aparecieron dos problemas del propio exp. 18: (a) esos bloques corrieron a
+**Exp. 34 — el exp. 18 queda retractado, y su conclusion resulta correcta igual.**
+El exp. 18 no midio fine-tuning: sus 50,4 M de pesos pre-entrenados corrieron a
 **lr=1e-3**, cien veces el `--enc-lr` apropiado, porque el config no declara
-`paramwise_cfg` y `finetune_blocks` solo cambia `requires_grad` —verificado
-construyendo el optimizador: 1 solo grupo—; y (b) sus numeros son del 28/08, del
-lado invalido del corte del 30/08, y **no se reproducen**: re-correr `ft0` hoy da
-ADE 3,744 contra 4,500 con **43 % menos objetos** de validacion. Su conclusion
-("queda descartada la hipotesis del congelamiento") **no se sostiene**. La medicion
-correcta esta pre-registrada en `run_ft4lr.sh` pero **bloqueada**: la GPU entrega el
-5 % (210 MHz de 3.105, 0,78 TFLOP/s de ~15) desde el 06/09 y las 24 corridas pasan
-de ~9 h a ~72 h. `nvidia-smi -pl` no esta soportado en esta laptop; el arreglo
-esperable es reiniciar.
+`paramwise_cfg` y `finetune_blocks` solo cambia `requires_grad` (verificado
+construyendo el optimizador: 1 solo grupo). Y sus numeros son del 28/08, del lado
+invalido del corte del 30/08: re-correr `ft0` hoy da ADE 3,744 contra 4,500, con
+**43 % menos objetos** de validacion. **Se retracta** su conclusion.
+
+Medido correctamente (3 brazos frescos, 1 fold x 8 semillas, `lr=1e-05` verificado
+en 48 parametros solo en `ft4lr`): **`ft4lr - ft0` = −0,155 (5/8, p=0,461)** y
+**`ft4lr - ft4` = +0,020 (4/8, p=0,908)**. Descongelar no ayuda, y la tasa no era
+el problema. **El experimento estaba mal hecho pero su conclusion era correcta.**
+Sigue sin medirse el descongelamiento **total** (302,6 M): OOM con lote 16 en los
+8 GB, y `VisionTransformer` de mmpretrain no acepta `with_cp`.
+
+**Cuidado con la GPU:** del 06 al 11/09 entrego el **5 %** de su capacidad (210 MHz
+de 3.105, 0,78 TFLOP/s de ~15) sin que ningun log lo dijera — las corridas pasaron
+de 0,23 a 2,53 s/iter. Se arreglo reiniciando. El mismo controlador embebido dejo
+de cargar la bateria y provoco un corte de energia en seco. La bateria esta sana
+(89,7 %, 89 ciclos). **Mirar `clocks.sm` bajo carga antes de estimar tiempos.**
 
 **Lo defendible hoy no es un número de predicción sino lo metodológico:** minADE_6
 mejora 29 % (p=0,003, 5/5) mientras el ADE real empeora en 0/5 folds —la métrica de
