@@ -6,6 +6,32 @@ from .base_dataset import BaseDataset
 from mmpretrain.registry import DATASETS
 
 
+# Referencia de la escala de densidad. Elegida con los percentiles medidos sobre
+# 2.230 voxeles ocupados del fold 0: los puntos por voxel van 2/7/20/62/202/1.711
+# (p10..p99) con maximo 5.395. Con DENS_REF=1000: 1 punto -> 0,10 · 20 -> 0,44 ·
+# 202 -> 0,77 · 1.711 -> 1,0 (recortado). Satura solo el ~1 % superior.
+DENS_REF = 1000.0
+
+
+def aplicar_densidad(grid, ix, iy, iz, dens_ref=DENS_REF):
+    """Llena `grid` con log1p(n_puntos)/log1p(dens_ref), recortado a [0, 1].
+
+    COMPARTIDA A PROPOSITO entre TrajectoryDataset (decoder) y
+    LidarSequenceDataset (pre-entrenamiento del MAE). Si cada uno tuviera su
+    copia y una cambiara, el encoder aprenderia una escala y el decoder le daria
+    otra — sin ningun error visible, solo peores numeros.
+
+    np.add.at y no `grid[ix,iy,iz] += 1`: la segunda NO acumula con indices
+    repetidos (asigna una sola vez por posicion) y dejaria todos los voxeles en
+    1, o sea el comportamiento binario disfrazado de densidad.
+    """
+    np.add.at(grid, (ix, iy, iz), 1.0)
+    np.log1p(grid, out=grid)
+    grid /= np.log1p(dens_ref)
+    np.clip(grid, 0.0, 1.0, out=grid)
+    return grid
+
+
 @DATASETS.register_module()
 class TrajectoryDataset(BaseDataset):
 
@@ -24,8 +50,66 @@ class TrajectoryDataset(BaseDataset):
                  eval_windows=1,
                  clip_norm=5.0,
                  norm_scale=None,
+                 centrar_en_objeto=False,
+                 densidad=False,
                  **kwargs):
         self.clip_norm = clip_norm
+        # centrar_en_objeto: traslada la nube por -centers[0] ANTES de voxelizar,
+        # de modo que la caja de vóxeles quede centrada en el OBJETO a predecir y
+        # no en el ego.
+        #
+        # POR QUE EXISTE. Medido sobre las 236 ventanas del fold 0 con la caja
+        # ±10 m del config de Fase 1: el objeto está a 32,7 m del ego (mediana) y
+        # solo el 11 % de las ventanas lo tienen dentro de la caja durante toda su
+        # historia (el futuro completo, 7,2 %). O sea que en el 89 % de los casos
+        # el encoder mira una región que NO CONTIENE al objeto que hay que
+        # predecir. Es la explicación unificada de los exp. 19-20 (la escena no
+        # aporta, el gate cierra a 0,004), 22 (más historia no ayuda) y 27 (la
+        # reconstrucción no predice el ADE).
+        #
+        # ARREGLA TAMBIEN LA AUGMENTACION. _augment rota `relative` alrededor del
+        # objeto y la grilla con np.rot90, o sea alrededor del CENTRO DE LA
+        # GRILLA. Con la grilla centrada en el ego esos son dos puntos distintos y
+        # la rotación es geométricamente incoherente, pese a que el comentario de
+        # _augment dice "aplicada consistentemente". Centrando en el objeto, los
+        # dos giros comparten centro y la augmentación pasa a ser correcta.
+        #
+        # DEFAULT False A PROPOSITO: los experimentos 15-27 se midieron con la
+        # caja ego-céntrica y tienen que seguir reproduciéndose exactamente.
+        self.centrar_en_objeto = centrar_en_objeto
+        # densidad: el voxel guarda CUANTOS puntos cayeron, no si cayo alguno.
+        #
+        # POR QUE. Medido sobre 2.230 voxeles ocupados de 25 ventanas del fold 0,
+        # los puntos por voxel van (percentiles 10/25/50/75/90/99):
+        #     2 / 7 / 20 / 62 / 202 / 1.711     maximo 5.395
+        # El 6,6 % tiene un solo punto y el 67,5 % tiene mas de diez. Con
+        # ocupacion binaria un voxel con 1 punto y otro con 5.395 valen lo mismo:
+        # se colapsan cuatro ordenes de magnitud a un bit. La escena entera que ve
+        # el modelo son 300 voxeles x 5 frames = 1.500 bits (trampa 32).
+        #
+        # LA ESCALA ES LOGARITMICA Y FIJA. log1p(n) / log1p(DENS_REF), recortado a
+        # 1. Logaritmica porque el rango abarca cuatro ordenes y una escala lineal
+        # dejaria a casi todos los voxeles pegados al cero. FIJA —no normalizada
+        # por muestra— porque dividir por el maximo de cada ventana haria que el
+        # mismo voxel valiera distinto segun que mas haya en la escena, y el
+        # modelo no podria aprender una escala estable.
+        #
+        # DENS_REF = 1000 deja: 1 punto -> 0,10 · 20 -> 0,44 · 202 -> 0,77 ·
+        # 1.711 -> 1,0 (recortado). Solo satura el ~1 % superior.
+        #
+        # NO CAMBIA LA FORMA de los tokens: sigue siendo (num_voxels,
+        # history_len), asi que patch_embed = Linear(history_len, embed_dim) y los
+        # checkpoints del encoder siguen cargando. Lo unico que cambia es el VALOR
+        # de cada token: de un bit a un continuo en [0, 1].
+        #
+        # OJO: el MAE fue pre-entrenado sobre entradas BINARIAS. Darle densidades
+        # continuas es un cambio de distribucion de entrada y puede degradar
+        # aunque la informacion sea mayor. Si no mejora, esa es la primera
+        # hipotesis a descartar re-pre-entrenando con densidad (20 min por fold).
+        #
+        # DEFAULT False: los experimentos 15-28 se midieron con ocupacion binaria.
+        self.densidad = densidad
+        self.DENS_REF = DENS_REF
         self.norm_scale = norm_scale
         self.eval_windows = eval_windows   # antes de super(): full_init() ya llama load_data_list
         self.sequence_len = sequence_len
@@ -254,8 +338,10 @@ class TrajectoryDataset(BaseDataset):
             ((pts[:, 2] - self.spatial_range[4]) / self.voxel_res).astype(np.int32),
             0, self.grid_z - 1
         )
-        grid[ix, iy, iz] = 1.0
-        return grid
+        if not self.densidad:
+            grid[ix, iy, iz] = 1.0
+            return grid
+        return aplicar_densidad(grid, ix, iy, iz, self.DENS_REF)
 
     def _augment(self, relative, voxel_sequences):
         """Rotación aleatoria 0/90/180/270° + flip opcional en plano XY.
@@ -305,6 +391,14 @@ class TrajectoryDataset(BaseDataset):
         t0 = item.get('frame0', item.get('t_start', 0))
         for i in range(t0, t0 + self.history_len):
             points = self.load_bin(os.path.join(scene_bin, f"{i}.bin"))
+            if self.centrar_en_objeto:
+                # ref_center es la posición del objeto en el PRIMER frame de la
+                # ventana, el mismo origen contra el que se mide `relative`. Se
+                # traslada la nube entera, no la caja, para no tocar
+                # point_cloud_to_voxel_grid ni el resto del pipeline.
+                # Solo XYZ: la 4ª columna es intensidad.
+                points = points.copy()
+                points[:, :3] -= ref_center
             grid   = self.point_cloud_to_voxel_grid(points)
             voxel_sequences.append(grid)
 

@@ -17,6 +17,19 @@ struct TrajPoint { int kind; int t; float x, y, z; };
 // scene -> obj_id -> pontos (coords GLOBAIS)
 static std::map<std::string, std::map<std::string, std::vector<TrajPoint>>> g_predictions;
 
+// ── Foco em um objeto de cada vez (pedido da Claudine, 09/09) ─────────────────
+// Com muitos carros o BEV vira um emaranhado de linhas e nao da para julgar
+// nenhuma predicao. g_focus_obj = -1 mostra todos; >= 0 mostra so o objeto
+// nessa posicao. g_predictions[scene] e um std::map, entao a ordem dos ids e
+// estavel entre frames e o indice sempre aponta para o mesmo carro.
+// g_n_obj_scene e escrito pelo draw e lido pelo tratador de teclas, que nao
+// tem como saber quantos objetos a cena atual tem.
+static int g_focus_obj   = -1;
+static int g_n_obj_scene = 0;
+// Quantos kinds acima de 2 procurar. 6 modos -> kinds 3..7, entao 5 basta;
+// deixo 7 de folga para k=8 sem tocar aqui de novo.
+static const int MAX_MODOS_EXTRA = 7;
+
 static void load_predictions(const std::string& path) {
     std::ifstream ifs(path);
     if (!ifs.is_open()) {
@@ -35,6 +48,18 @@ static void load_predictions(const std::string& path) {
     printf("Predições carregadas: %.0f pontos.\n", count);
 }
 
+// Qual objeto esta em foco nesta cena, pelo id. Calculado aqui e nao guardado
+// pelo draw porque read_bbox_file corre ANTES e precisa do mesmo valor: se
+// dependesse do frame anterior a caixa ficaria um frame atrasada.
+static std::string foco_obj_id(const std::string& scene) {
+    auto it = g_predictions.find(scene);
+    if (g_focus_obj < 0 || it == g_predictions.end() || it->second.empty()) return "";
+    const int idx = g_focus_obj % (int) it->second.size();
+    int i = 0;
+    for (auto& kv : it->second) if (i++ == idx) return kv.first;
+    return "";
+}
+
 // Desenha as trajetórias no BEV: transforma global->sensor com inv(pose) e projeta.
 static void draw_predictions_birdview(cv::Mat& birdview, const std::string& scene,
                                       float pose[4][4], float meters, int size_in_pixels) {
@@ -45,8 +70,23 @@ static void draw_predictions_birdview(cv::Mat& birdview, const std::string& scen
     float inv[4][4];
     if (!invert_matrix(pose, inv)) return;
 
+    const int n_obj = (int) it->second.size();
+    g_n_obj_scene = n_obj;
+    // Se a cena anterior tinha mais objetos, o indice pode estar fora daqui.
+    const int foco = (g_focus_obj < 0 || n_obj == 0) ? -1 : (g_focus_obj % n_obj);
+    std::string id_foco;
+    int idx_obj = -1;
+    int n_modos_extra = 0;
+
     for (auto& kv : it->second) {
-        for (int kind = 0; kind <= 2; ++kind) {
+        ++idx_obj;
+        if (foco >= 0 && idx_obj != foco) continue;
+        if (foco >= 0) id_foco = kv.first;
+        // kind 3+ = hipoteses alternativas do modelo multimodal (k>1). So se
+        // desenham com UM carro em foco: com todos, seriam 6 linhas por objeto
+        // e o BEV viraria exatamente o emaranhado que a tecla n/m evita.
+        const int kind_max = (foco >= 0) ? 2 + MAX_MODOS_EXTRA : 2;
+        for (int kind = 0; kind <= kind_max; ++kind) {
             std::vector<std::pair<int, cv::Point>> proj;
             for (auto& p : kv.second) {
                 if (p.kind != kind) continue;
@@ -61,14 +101,40 @@ static void draw_predictions_birdview(cv::Mat& birdview, const std::string& scen
                           return a.first < b.first; });
             cv::Scalar color = (kind == 0) ? cv::Scalar(160,160,160)   // histórico
                              : (kind == 1) ? cv::Scalar(0,255,0)       // real (verde)
-                                           : cv::Scalar(0,0,255);      // predito (vermelho)
-            int thick = (kind == 0) ? 1 : 2;
+                             : (kind == 2) ? cv::Scalar(0,0,255)       // predito (vermelho)
+                                           : cv::Scalar(255,170,80);   // modos alternativos (AZUL)
+            // OJO: OpenCV es BGR, no RGB. Scalar(60,60,180) parecia azul leido
+            // como RGB y salia rojo oscuro, indistinguible de la prediccion
+            // principal. Azul de verdad es B alto: (255,170,80).
+            int thick = (kind == 0 || kind >= 3) ? 1 : 2;
             for (size_t i = 1; i < proj.size(); ++i)
                 cv::line(birdview, proj[i-1].second, proj[i].second, color, thick, cv::LINE_AA);
-            for (auto& pr : proj)
-                cv::circle(birdview, pr.second, 3, color, -1, cv::LINE_AA);
+            if (kind < 3)                    // sem bolinhas nos alternativos: polui
+                for (auto& pr : proj)
+                    cv::circle(birdview, pr.second, 3, color, -1, cv::LINE_AA);
+            if (kind >= 3 && !proj.empty()) ++n_modos_extra;
         }
     }
+
+    // Rotulo: sem isto nao da para saber qual carro esta em foco nem que a
+    // tecla existe.
+    char rotulo[192];
+    if (foco < 0)
+        snprintf(rotulo, sizeof(rotulo),
+                 "predicoes: TODOS (%d objs)   n/m = um carro por vez", n_obj);
+    else
+        if (n_modos_extra > 0)
+            snprintf(rotulo, sizeof(rotulo),
+                     "predicoes: obj %s   (%d/%d)   +%d modos alternativos   n/m = trocar",
+                     id_foco.c_str(), foco + 1, n_obj, n_modos_extra);
+        else
+            snprintf(rotulo, sizeof(rotulo),
+                     "predicoes: obj %s   (%d/%d)   n/m = trocar de carro",
+                     id_foco.c_str(), foco + 1, n_obj);
+    cv::putText(birdview, rotulo, cv::Point(10, 24), cv::FONT_HERSHEY_SIMPLEX,
+                0.55, cv::Scalar(0, 0, 0), 3, cv::LINE_AA);
+    cv::putText(birdview, rotulo, cv::Point(10, 24), cv::FONT_HERSHEY_SIMPLEX,
+                0.55, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
 }
 
 int main(int argc, char** argv) {
@@ -96,6 +162,11 @@ int main(int argc, char** argv) {
                 std::cerr << "Erro: O argumento --input requer um caminho." << std::endl;
                 return EXIT_FAILURE;
             }
+        } else if (arg == "--foco") {
+            // Arrancar con un auto ya enfocado. Sirve para capturas
+            // reproducibles y para ver los modos alternativos sin tener que
+            // apretar n (que necesita el teclado en la ventana).
+            if (i + 1 < argc) g_focus_obj = atoi(argv[++i]);
         } else if (arg == "-v") {
             if (i + 1 < argc) {
                 try {
@@ -257,7 +328,8 @@ int main(int argc, char** argv) {
 
             vector<vector<array<float, 3>>> all_bbox;
             vector<vector<float>> all_transformed_bbox_for_rangeview;
-            read_bbox_file(bbox_root_dir, scenes[s], pose_file_name, all_bbox, pose, birdview_image, all_transformed_bbox_for_rangeview, meters, size_in_pixels, show_bboxes);
+            read_bbox_file(bbox_root_dir, scenes[s], pose_file_name, all_bbox, pose, birdview_image, all_transformed_bbox_for_rangeview, meters, size_in_pixels, show_bboxes,
+                           foco_obj_id(scenes[s]));
 
             // Desenhar trajetórias preditas/reais sobre o BEV (tecla 't' alterna)
             if (show_predictions)
@@ -357,6 +429,20 @@ int main(int argc, char** argv) {
                     else if ((key == 84) || (key == 116)) {
                         show_predictions = !show_predictions;
                         break; // t — alterna trajetórias preditas
+                    }
+                    else if ((key == 78) || (key == 110)) {
+                        // n — proximo carro. Cicla: todos -> 0 -> 1 -> ... -> todos
+                        if (g_n_obj_scene <= 0)                        g_focus_obj = -1;
+                        else if (g_focus_obj + 1 >= g_n_obj_scene)     g_focus_obj = -1;
+                        else                                           g_focus_obj += 1;
+                        break; // n
+                    }
+                    else if ((key == 77) || (key == 109)) {
+                        // m — carro anterior, mesmo ciclo ao contrario
+                        if (g_n_obj_scene <= 0)      g_focus_obj = -1;
+                        else if (g_focus_obj < 0)    g_focus_obj = g_n_obj_scene - 1;
+                        else                         g_focus_obj -= 1;
+                        break; // m
                     }
                     else if ((key == 82) || (key == 114)) {
                         draw_red_points = !draw_red_points;

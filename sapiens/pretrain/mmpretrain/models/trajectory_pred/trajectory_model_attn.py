@@ -106,10 +106,17 @@ class TrajectoryModelWithAttention(BaseModel):
         self.mode_head = nn.Linear(hidden_dim, num_modes) if num_modes > 1 else None
 
         input_dim = scene_dim + history_len * 3
-        # El tronco se separa de la última capa para que la cabeza de modo lea el
-        # MISMO rasgo que la de regresión (así decide con la misma información).
-        # Con K=1 el conjunto tronco+cabeza es idéntico al nn.Sequential anterior:
-        # mismas capas, mismos tamaños, mismo orden de creación de parámetros.
+        # UN SOLO nn.Sequential, igual que siempre. La cabeza de modo necesita leer
+        # el rasgo previo a la capa de salida, y la forma obvia de conseguirlo
+        # —partirlo en `decoder` + `reg_head`— RENOMBRA los parámetros: el
+        # checkpoint trae `decoder.6.*` y el modelo pasaría a esperar `reg_head.*`.
+        # Con strict=False eso carga en silencio dejando la capa de salida
+        # ALEATORIA. Medido: el ADE del fold 0 pasó de 2,84 a 22,14 con el mismo
+        # checkpoint. Es la clase de bug del hallazgo 10, y el guard de
+        # eval_fase1_seeds.py no lo agarra porque el encoder aporta casi todos los
+        # pesos y la cuenta de "cargados" sigue alta.
+        # Manteniendo el Sequential, el forward usa decoder[:-1] para el rasgo y
+        # decoder[-1] para la salida: mismos nombres, checkpoints viejos válidos.
         self.decoder = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
@@ -117,8 +124,8 @@ class TrajectoryModelWithAttention(BaseModel):
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
+            nn.Linear(hidden_dim, out_dim)
         )
-        self.reg_head = nn.Linear(hidden_dim, out_dim)
 
     def _encode_scene(self, inputs):
         """
@@ -161,8 +168,8 @@ class TrajectoryModelWithAttention(BaseModel):
 
         # 5. Concatenar com história original e decodificar
         combined = torch.cat([scene_feat, obj_history_flat], dim=1)  # (B, scene_dim + history_len*3)
-        rasgo = self.decoder(combined)                               # (B, hidden_dim)
-        out = self.reg_head(rasgo)
+        rasgo = self.decoder[:-1](combined)                          # (B, hidden_dim)
+        out = self.decoder[-1](rasgo)                                # (B, out_dim)
         logits = self.mode_head(rasgo) if self.mode_head is not None else None
 
         B, K, D = out.size(0), self.num_modes, self.pred_len * 3

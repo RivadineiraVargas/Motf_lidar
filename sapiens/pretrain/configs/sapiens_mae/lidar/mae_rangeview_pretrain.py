@@ -82,7 +82,13 @@ optim_wrapper = dict(
 
 train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=1000)
 default_hooks = dict(checkpoint=dict(interval=200, max_keep_ckpts=3),
-                     logger=dict(interval=10), runtime_info=None)
+                     logger=dict(interval=10))
+# runtime_info NO se desactiva. RuntimeInfoHook es el que publica al logger
+# la PERDIDA (update_scalar en after_train_iter) y el lr (before_train_iter).
+# Con runtime_info=None el log solo traia grad_norm/time/memory: ningun
+# experimento de range-view pudo verificar nunca que su encoder aprendiera,
+# porque ni el .log ni scalars.json guardaban la perdida. El track de voxeles
+# no lo desactiva y por eso alli si se ve.
 randomness = dict(seed=0)
 resume = False
 work_dir = './work_dirs/mae_rangeview'

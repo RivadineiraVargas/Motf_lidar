@@ -35,12 +35,74 @@ modificar.
    Antes de proponer cualquier aumento de datos: decir en qué peldaño estamos y por
    qué su resultado ya es bueno. Ya me desvié de esto cuatro veces.
 
-**Estado al 02/09/2026.** Tres resultados independientes cierran la línea de
-variantes de arquitectura: la escena LiDAR no aporta (0/5 folds), la capacidad va
-en la misma dirección en los cinco folds pero no llega a significancia (p=0,102), y
-la historia completa de 1,1 s no mejora y sobreajusta (1/5 folds). El encoder **sí**
-generaliza, así que no es eso. El cuello está medido: 236 ventanas de entrenamiento
-desde 8 escenas, y un MAE pre-entrenado con 8 muestras.
+**Estado al 09/09/2026.** Dos resultados cierran la semana, los dos negativos.
+
+**Exp. 31 — la representación queda descartada.** Range-view a resolución nativa
+(2.650 columnas azimutales, 660 tokens, contra 300 vóxeles de 2 m) da
+**+0,351 · p=0,557 · 3/5 folds**: la escena tampoco aporta. El fold 0 daba −1,152
+con 8/8 semillas y engañó tres días; los folds 3 y 4 lo dieron vuelta con 0/8
+semillas cada uno. Lo único que sobrevive es que el gate se **abre** a 0,008-0,013
+en los cinco folds (contra ~0,003 en vóxeles): la primera representación que el
+modelo no apaga del todo — y aun así predice peor.
+
+**Exp. 32 — el mejor resultado del proyecto era un artefacto.** `gate0` le ganaba al
+baseline cinemático por −0,217 en 5/5 folds y se leía como "la arquitectura aporta
+capacidad". No: los dos modelos tienen el **mismo** MLP, el mismo dataset y los
+mismos hiperparámetros, y difieren solo en que `gate0` recibe 64 columnas que valen
+**exactamente cero** — y `nn.Linear` inicializa con cota `1/sqrt(in_features)`, así
+que las mismas entradas entran con pesos 2,3× más chicos. Pegándole al baseline 64
+columnas de ceros se reproduce la ventaja: **−0,260 en 5/5 folds, r=+0,991 fold por
+fold**, residuo +0,042. **No hay ninguna configuración en el proyecto que le gane al
+baseline cinemático por una razón distinta de la escala de inicialización.**
+
+**Exp. 33 — el artefacto no aguanta ni cambiar k, y aparece lo unico solido.** A
+k=6 la ventaja de la inicializacion se evapora (−0,053, p=0,758, 3/5): el fold 4 la
+dio vuelta, el mismo que dio vuelta el exp. 31. Pero el brazo secundario dio el
+resultado mas firme de la semana: **k=6 empeora el ADE real en los 5 folds**
+(+0,510, p=0,0055, 0/5) mientras el minADE_6 del oraculo "mejora" 26 %. Y ahora
+esta medido POR QUE: sobre los 265 objetos de las 10 escenas, la dispersion entre
+los 6 modos a 3 s es de **16,7 m contra 5,97 m de recorrido real** (2,8x), con
+mediana de recorrido **0,00 m** porque la mitad de los objetos estan detenidos. Los
+seis modos no son seis futuros plausibles: son seis tiros. Ver
+`docs/figuras/k6_caja_y_modos.png`.
+
+**Los tres eslabones, cerrados dos:** el **encoder** funciona y no es el cuello
+(exps. 21, 27, 30: un encoder 2-5× mejor da la misma predicción); la
+**representación** está descartada por dos vías independientes (exp. 29 densidad,
+exp. 31 range-view nativo); el **consumo** —una sola query de cross-attention
+comprimida a 64 dims— **no se tocó en 32 experimentos**. Es el único sospechoso que
+queda.
+
+**Exp. 34 — el exp. 18 queda retractado, y su conclusion resulta correcta igual.**
+El exp. 18 no midio fine-tuning: sus 50,4 M de pesos pre-entrenados corrieron a
+**lr=1e-3**, cien veces el `--enc-lr` apropiado, porque el config no declara
+`paramwise_cfg` y `finetune_blocks` solo cambia `requires_grad` (verificado
+construyendo el optimizador: 1 solo grupo). Y sus numeros son del 28/08, del lado
+invalido del corte del 30/08: re-correr `ft0` hoy da ADE 3,744 contra 4,500, con
+**43 % menos objetos** de validacion. **Se retracta** su conclusion.
+
+Medido correctamente (3 brazos frescos, 1 fold x 8 semillas, `lr=1e-05` verificado
+en 48 parametros solo en `ft4lr`): **`ft4lr - ft0` = −0,155 (5/8, p=0,461)** y
+**`ft4lr - ft4` = +0,020 (4/8, p=0,908)**. Descongelar no ayuda, y la tasa no era
+el problema. **El experimento estaba mal hecho pero su conclusion era correcta.**
+Sigue sin medirse el descongelamiento **total** (302,6 M): OOM con lote 16 en los
+8 GB, y `VisionTransformer` de mmpretrain no acepta `with_cp`.
+
+**Cuidado con la GPU:** del 06 al 11/09 entrego el **5 %** de su capacidad (210 MHz
+de 3.105, 0,78 TFLOP/s de ~15) sin que ningun log lo dijera — las corridas pasaron
+de 0,23 a 2,53 s/iter. Se arreglo reiniciando. El mismo controlador embebido dejo
+de cargar la bateria y provoco un corte de energia en seco. La bateria esta sana
+(89,7 %, 89 ciclos). **Mirar `clocks.sm` bajo carga antes de estimar tiempos.**
+
+**Lo defendible hoy no es un número de predicción sino lo metodológico:** minADE_6
+mejora 29 % (p=0,003, 5/5) mientras el ADE real empeora en 0/5 folds —la métrica de
+la literatura premia lo que empeora la predicción, y un survey de ~350 métodos no lo
+advierte—; doce retractaciones por reportar con una semilla o un fold; y el
+artefacto de inicialización, que se destapó preguntando **"¿por qué exactamente
+sería mejor?"** en vez de "¿es significativo?".
+
+El cuello de datos sigue en pie —236 ventanas desde 10 escenas, un MAE con 8
+muestras— pero ya no es la única explicación disponible.
 
 Pero que el cuello sea de datos **no autoriza a ir a buscarlos** (regla 5). El
 peldaño vigente es **10-100 sweeps, con 275 en disco, y su resultado todavía no es
@@ -48,7 +110,11 @@ bueno**: a 100 sweeps el encoder pica cerca de la época 1000 y después memoriz
 10× de datos dieron solo −6,8 %. **El trabajo es mejorar ahí**, no escalar — ver
 "La ruta" en el mapa, que arranca con la puerta.
 
+**Y agregar semillas no es el camino:** en el exp. 31 el ruido de semilla explica el
+**8 %** de la varianza entre folds. De 8 a 16 semillas el error estándar baja un 2 %
+y cuesta 39 h de GPU. Lo que da poder son **folds**, y harían falta 10.
+
 Ver [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) para la arquitectura, el flujo de
-datos, las 24 trampas, la guía de navegación y **la ruta**. Ver
-`docs/EXPERIMENTOS_DECODER.md` para los 22 experimentos con sus números y comandos
+datos, las 39 trampas, la guía de navegación y **la ruta**. Ver
+`docs/EXPERIMENTOS_DECODER.md` para los 34 experimentos con sus números y comandos
 de reproducción.

@@ -40,6 +40,17 @@ train_dataloader = dict(
         pred_len=pred_len,
         voxel_res=2.0,                       # (ignorado pela range-view; req. p/ __init__)
         spatial_range=[-10, 10, -10, 10, -2, 4],
+        # LOS DOS SON IMPRESCINDIBLES y faltaban: el track de range-view nunca los
+        # tuvo mientras que noclip_dec_fold*.py (voxeles) si. Sin ellos el dataset
+        # usa clip_norm=5.0 y norm_scale=None (modo historico), que es el BUG A
+        # documentado: se normaliza el futuro (3 s) con el desvio del historico
+        # (0,5 s) y despues se recorta a +-5. Medido sobre este fold: el 29,5 % de
+        # los valores del objetivo quedaban en el tope del recorte, contra 0 % en
+        # voxeles. El modelo entrena sin ver nunca desplazamientos grandes,
+        # subpredice, y como el evaluador corre con --sin-clip el error explota:
+        # gate0_rv daba ADE 11,277 contra 2,781 del mismo control en voxeles.
+        clip_norm=None,
+        norm_scale=10.0,
         scenes=train_scenes,
     ),
 )
@@ -76,4 +87,4 @@ default_hooks = dict(checkpoint=dict(interval=50, max_keep_ckpts=2),
                      logger=dict(interval=20))
 
 work_dir = './work_dirs/rvcv/dec_fold0'
-load_from = './work_dirs/mae_encoder_rangeview.pth'
+load_from = './work_dirs/mae_rv_nativo/enc_fold0.pth'
